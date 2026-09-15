@@ -7,27 +7,21 @@ $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $CoreRoot = Join-Path $RepoRoot 'Core'
-$Files = @(
-    'SWeaverTimeline.h',
-    'SWeaverTimeline.cpp',
-    'WeaverTimelineTypes.h',
-    'WeaverTimelineVersion.h'
-)
+$Files = Get-ChildItem -LiteralPath $CoreRoot -File | Sort-Object Name
+
+if ($Files.Count -eq 0) {
+    throw "No source-master files found in $CoreRoot"
+}
 
 foreach ($DestinationRoot in $DestinationRoots) {
     New-Item -ItemType Directory -Force -Path $DestinationRoot | Out-Null
 
-    foreach ($File in $Files) {
-        $Source = Join-Path $CoreRoot $File
-        if (-not (Test-Path -LiteralPath $Source)) {
-            throw "Missing master source file: $Source"
-        }
-
-        $Destination = Join-Path $DestinationRoot $File
-        Copy-Item -LiteralPath $Source -Destination $Destination -Force
+    foreach ($SourceFile in $Files) {
+        $Destination = Join-Path $DestinationRoot $SourceFile.Name
+        Copy-Item -LiteralPath $SourceFile.FullName -Destination $Destination -Force
     }
 
-    Write-Host "Synced WeaverTimeline Core -> $DestinationRoot"
+    Write-Host "Synced $($Files.Count) WeaverTimeline Core files -> $DestinationRoot"
 }
 
 Write-Host 'Sync complete. Run Verify-WeaverTimeline.ps1 to confirm byte-for-byte equality.'

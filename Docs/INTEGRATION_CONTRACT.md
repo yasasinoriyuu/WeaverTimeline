@@ -2,7 +2,22 @@
 
 ## Purpose
 
-`Core/` is presentation + interaction infrastructure only. It is intentionally copied into each consuming Editor Module instead of being loaded as a shared plugin dependency.
+`Core/` is reusable UE5 Editor presentation + interaction infrastructure only. It is intentionally copied into each consuming Editor Module instead of being loaded as a shared plugin dependency.
+
+The source master has three reusable layers:
+
+```text
+SWeaverTimeline
+    self-drawn timeline interaction core
+
+SWeaverTimelineHost + FWeaverViewportOverlay
+    optional CAK-style bottom-of-Level-Viewport presentation shell
+
+FWeaverSequencerBridge
+    optional active-Sequencer time / view-range / geometry synchronization
+```
+
+A consumer may use only the layers it needs, but copied Core source must remain byte-for-byte identical to the source master.
 
 ## Business adapter responsibilities
 
@@ -13,9 +28,9 @@ A consuming plugin must:
 3. Own persistence, transactions, Undo/Redo and runtime meaning.
 4. Apply edit delegates back to business data.
 5. Re-feed updated view data to `SWeaverTimeline` after edits.
-6. Own Sequencer binding and time/view-range synchronization if used.
+6. Own the business meaning of the current frame and respond to incoming Sequencer frame changes.
 
-The Core never writes MovieScene, assets, camera data, action data or audio data itself.
+The Core never writes MovieScene business data, assets, camera state, action data or audio data itself.
 
 ## Stable identity rule
 
@@ -39,11 +54,36 @@ If `bCancelled == true`, the adapter must restore its original business state. T
 
 ## External ViewRange mode
 
-`SetExternalViewRange(Start, End)` means another system (normally Sequencer) owns the authoritative visible time range.
+`SetExternalViewRange(Start, End)` means another system owns the authoritative visible time range.
 
-In this mode, RMB pan and wheel zoom still emit `OnViewRangeChanged(NewStart, NewEnd)`, but the widget does not make that new range authoritative by itself. The adapter should apply it to the owner and then call `SetExternalViewRange` with the resulting range.
+In this mode, RMB pan and wheel zoom emit `OnViewRangeChanged(NewStart, NewEnd)`, but the widget does not make that new range authoritative by itself.
+
+When `FWeaverSequencerBridge` is used, bind the timeline's view-range request to `PushTimelineViewRange`. The bridge applies the request to Sequencer; the next `Sync()` mirrors Sequencer's resulting range back into the timeline.
 
 Without external mode, the widget updates its own local range and also emits the delegate.
+
+## Sequencer bridge contract
+
+`FWeaverSequencerBridge` is editor infrastructure, not business logic.
+
+The consumer should:
+
+- register the bridge with its `SWeaverTimeline` instance;
+- provide the timeline display-rate resolver when its frame domain is not simply Sequencer's focused display rate;
+- receive `FOnWeaverSequencerFrameChanged` and update its own current-frame/business preview state;
+- bind timeline scrub changes to `PushTimelineFrame`;
+- bind timeline view-range changes to `PushTimelineViewRange`;
+- call `Sync(TimelineGeometry)` from the owning Slate widget's `Tick`.
+
+`Sync()` mirrors Sequencer's view range, aligns the self-drawn track area with Sequencer's `TrackAreaView`, and pulls SubFrame time during playback. Active-Sequencer discovery is intentionally low-frequency, following CAK's proven pattern rather than scanning the editor every frame.
+
+## Viewport host / overlay contract
+
+`SWeaverTimelineHost` only owns collapse/expand, panel height and resize mouse-capture behavior.
+
+`FWeaverViewportOverlay` only owns attachment to the active Level Editor viewport. It uses the same bottom-aligned overlay placement proven in CAK and rechecks the active viewport once per second.
+
+Neither layer may create business panels or reference Camera / CharacterAction / Audio systems directly.
 
 ## Context menu rule
 
@@ -60,7 +100,7 @@ Delete/Backspace emits `OnDeleteRequested`. The Core clears visual selection but
 
 ## Module requirements
 
-A consumer Editor Module needs these standard dependencies:
+Base Timeline / Host use standard dependencies:
 
 ```text
 Core
@@ -68,6 +108,18 @@ Slate
 SlateCore
 InputCore
 ```
+
+Viewport Overlay and Sequencer Bridge require additional UE Editor modules. CAK's currently working implementation includes:
+
+```text
+UnrealEd
+LevelEditor
+MovieScene
+Sequencer
+SequencerWidgets
+```
+
+Do not treat that list as a frozen implementation recipe across UE versions. The consuming plugin's local UE5 Skill and compile result are authoritative.
 
 No module API macro is used by the source master. Keep the copied Core inside the consuming module rather than exporting it across module boundaries.
 
@@ -84,7 +136,7 @@ Pose
 ControlRig
 Audio
 HeadMotion
-MovieScene persistence
+MovieScene business persistence
 plugin-specific Tab / ToolMenu / StyleSet registration
 ```
 

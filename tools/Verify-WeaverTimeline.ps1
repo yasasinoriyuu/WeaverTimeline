@@ -7,27 +7,19 @@ $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $CoreRoot = Join-Path $RepoRoot 'Core'
-$Files = @(
-    'SWeaverTimeline.h',
-    'SWeaverTimeline.cpp',
-    'WeaverTimelineTypes.h',
-    'WeaverTimelineVersion.h'
-)
+$Files = Get-ChildItem -LiteralPath $CoreRoot -File | Sort-Object Name
+
+if ($Files.Count -eq 0) {
+    throw "No source-master files found in $CoreRoot"
+}
 
 $Failed = $false
 
-foreach ($File in $Files) {
-    $Master = Join-Path $CoreRoot $File
-    if (-not (Test-Path -LiteralPath $Master)) {
-        Write-Error "Missing master source file: $Master"
-        $Failed = $true
-        continue
-    }
-
-    $MasterHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Master).Hash
+foreach ($MasterFile in $Files) {
+    $MasterHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $MasterFile.FullName).Hash
 
     foreach ($DestinationRoot in $DestinationRoots) {
-        $Copy = Join-Path $DestinationRoot $File
+        $Copy = Join-Path $DestinationRoot $MasterFile.Name
         if (-not (Test-Path -LiteralPath $Copy)) {
             Write-Error "Missing copy: $Copy"
             $Failed = $true
@@ -41,7 +33,7 @@ foreach ($File in $Files) {
             Write-Host "  copy:   $CopyHash"
             $Failed = $true
         } else {
-            Write-Host "OK $File -> $DestinationRoot [$MasterHash]"
+            Write-Host "OK $($MasterFile.Name) -> $DestinationRoot [$MasterHash]"
         }
     }
 }
@@ -50,4 +42,4 @@ if ($Failed) {
     throw 'WeaverTimeline verification failed.'
 }
 
-Write-Host 'All WeaverTimeline Core copies are byte-for-byte identical to the source master.'
+Write-Host "All $($Files.Count) WeaverTimeline Core files are byte-for-byte identical to the source master in every destination."

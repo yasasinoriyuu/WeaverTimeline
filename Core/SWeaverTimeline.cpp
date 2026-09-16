@@ -14,7 +14,9 @@ constexpr float RightPanThreshold = 4.0f;
 constexpr float PrimaryDragThreshold = 4.0f;
 constexpr float TimingRowHeight = 18.0f;
 constexpr float TimingRowHandleWidth = 5.0f;
-constexpr float ExpansionToggleSize = 10.0f;
+constexpr float ExpansionToggleInset = 6.0f;
+constexpr float ExpansionToggleWidth = 10.0f;
+constexpr float ExpansionToggleHeight = 16.0f;
 constexpr double MinBlockDurationFrames = 0.001;
 }
 
@@ -203,6 +205,32 @@ float SWeaverTimeline::LaneHeightForIndex(const int32 LaneIndex) const
 float SWeaverTimeline::TimingRowTop(const int32 LaneIndex, const int32 RowIndex) const
 {
     return LaneTop(LaneIndex) + LaneHeight + RowIndex * TimingRowHeight;
+}
+
+SWeaverTimeline::FExpansionToggleGeometry SWeaverTimeline::GetExpansionToggleGeometry(
+    const float BlockX0,
+    const float BlockX1,
+    const float BlockTop,
+    const float BlockHeight) const
+{
+    FExpansionToggleGeometry Result;
+    const float Left = BlockX0 + BlockResizeHandleWidth + ExpansionToggleInset;
+    const float Right = FMath::Min(
+        Left + ExpansionToggleWidth,
+        BlockX1 - BlockResizeHandleWidth - 2.0f);
+    const float Top = BlockTop + FMath::Max(0.0f, (BlockHeight - ExpansionToggleHeight) * 0.5f);
+    const float Bottom = FMath::Min(Top + ExpansionToggleHeight, BlockTop + BlockHeight);
+
+    if (Right <= Left || Bottom <= Top)
+    {
+        return Result;
+    }
+
+    Result.Left = Left;
+    Result.Top = Top;
+    Result.Right = Right;
+    Result.Bottom = Bottom;
+    return Result;
 }
 
 float SWeaverTimeline::FrameToLocalX(const FGeometry& Geometry, const double Frame) const
@@ -587,37 +615,40 @@ int32 SWeaverTimeline::OnPaint(
                 HandleColor);
         }
 
-        if (!Block.Label.IsEmpty() && Width > 28.0f)
+        const FExpansionToggleGeometry ToggleGeometry = GetExpansionToggleGeometry(X0, X1, Top, Height);
+        const float LabelLeft = ToggleGeometry.IsValid() ? ToggleGeometry.Right + 4.0f : X0 + 6.0f;
+        const float BlockLabelWidth = X1 - LabelLeft - 4.0f;
+        if (!Block.Label.IsEmpty() && BlockLabelWidth > 20.0f)
         {
             FSlateDrawElement::MakeText(
                 OutDrawElements,
                 LayerId + 7,
                 AllottedGeometry.ToPaintGeometry(
-                    FVector2f(Width - 8.0f, Height - 4.0f),
-                    FSlateLayoutTransform(FVector2f(X0 + 6.0f, Top + 4.0f))),
+                    FVector2f(BlockLabelWidth, Height - 4.0f),
+                    FSlateLayoutTransform(FVector2f(LabelLeft, Top + 4.0f))),
                 Block.Label,
                 FAppStyle::GetFontStyle("SmallFont"),
                 ESlateDrawEffect::None,
             Block.bEnabled ? FLinearColor::White : FLinearColor(1, 1, 1, 0.35f));
         }
 
-        if (Block.TimingRows.Num() > 0)
+        if (Block.TimingRows.Num() > 0 && ToggleGeometry.IsValid())
         {
             const TArray<FVector2f> Toggle =
                 Block.bExpanded
                     ? TArray<FVector2f>
                     {
-                        FVector2f(X0 + 5.0f, Top + 7.0f),
-                        FVector2f(X0 + 5.0f, Top + 15.0f),
-                        FVector2f(X0 + 10.0f, Top + 11.0f),
-                        FVector2f(X0 + 5.0f, Top + 7.0f)
+                        FVector2f(ToggleGeometry.Left + 2.0f, ToggleGeometry.Top + 2.0f),
+                        FVector2f(ToggleGeometry.Left + 2.0f, ToggleGeometry.Bottom - 2.0f),
+                        FVector2f(ToggleGeometry.Right - 1.0f, (ToggleGeometry.Top + ToggleGeometry.Bottom) * 0.5f),
+                        FVector2f(ToggleGeometry.Left + 2.0f, ToggleGeometry.Top + 2.0f)
                     }
                     : TArray<FVector2f>
                     {
-                        FVector2f(X0 + 4.0f, Top + 8.0f),
-                        FVector2f(X0 + 12.0f, Top + 8.0f),
-                        FVector2f(X0 + 8.0f, Top + 13.0f),
-                        FVector2f(X0 + 4.0f, Top + 8.0f)
+                        FVector2f(ToggleGeometry.Left + 2.0f, ToggleGeometry.Top + 2.0f),
+                        FVector2f(ToggleGeometry.Right - 1.0f, ToggleGeometry.Top + 2.0f),
+                        FVector2f((ToggleGeometry.Left + ToggleGeometry.Right) * 0.5f, ToggleGeometry.Bottom - 2.0f),
+                        FVector2f(ToggleGeometry.Left + 2.0f, ToggleGeometry.Top + 2.0f)
                     };
             FSlateDrawElement::MakeLines(
                 OutDrawElements,
@@ -732,6 +763,11 @@ SWeaverTimeline::FHitResult SWeaverTimeline::HitTest(
 
     Result.bTrackArea = true;
 
+    const float MainLaneTop = LaneTop(LaneIndex);
+    const float MainLaneBottom = MainLaneTop + LaneHeight;
+    const float KeyCenterY = MainLaneTop + LaneHeight * 0.5f;
+    const float KeyHitRadius = FMath::Min(KeyRadius + 5.0f, LaneHeight * 0.5f);
+
     for (int32 Index = Keys.Num() - 1; Index >= 0; --Index)
     {
         const FWeaverKey& Key = Keys[Index];
@@ -743,7 +779,11 @@ SWeaverTimeline::FHitResult SWeaverTimeline::HitTest(
         const double DrawFrame = (DragMode == EDragMode::Key && DragItemId == Key.KeyId)
             ? DragPreviewKeyFrame
             : Key.Frame;
-        if (FMath::Abs(FrameToLocalX(Geometry, DrawFrame) - Local.X) <= KeyRadius + 5.0f)
+        const bool bInMainLane = Local.Y >= MainLaneTop && Local.Y <= MainLaneBottom;
+        const bool bNearKeyCenter = FMath::Abs(Local.Y - KeyCenterY) <= KeyHitRadius;
+        if (bInMainLane
+            && bNearKeyCenter
+            && FMath::Abs(FrameToLocalX(Geometry, DrawFrame) - Local.X) <= KeyHitRadius)
         {
             Result.KeyId = Key.KeyId;
             return Result;
@@ -780,7 +820,13 @@ SWeaverTimeline::FHitResult SWeaverTimeline::HitTest(
         {
             Result.BlockId = Block.BlockId;
             Result.BlockEditKind = EWeaverBlockEditKind::Move;
-            if (Block.TimingRows.Num() > 0 && Local.X <= X0 + ExpansionToggleSize)
+            const FExpansionToggleGeometry ToggleGeometry = GetExpansionToggleGeometry(X0, X1, BlockTop, BlockHeight);
+            if (Block.TimingRows.Num() > 0
+                && ToggleGeometry.IsValid()
+                && Local.X >= ToggleGeometry.Left
+                && Local.X <= ToggleGeometry.Right
+                && Local.Y >= ToggleGeometry.Top
+                && Local.Y <= ToggleGeometry.Bottom)
             {
                 Result.bExpansionToggle = true;
                 return Result;

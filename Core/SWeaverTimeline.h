@@ -117,6 +117,19 @@ private:
         FWeaverSelection ToSelection() const;
     };
 
+    struct FExpansionToggleGeometry
+    {
+        float Left = 0.0f;
+        float Top = 0.0f;
+        float Right = 0.0f;
+        float Bottom = 0.0f;
+
+        bool IsValid() const
+        {
+            return Right > Left && Bottom > Top;
+        }
+    };
+
     int32 FindLaneIndex(const FGuid& LaneId) const;
     const FWeaverKey* FindKey(const FGuid& KeyId) const;
     const FWeaverBlock* FindBlock(const FGuid& BlockId) const;
@@ -127,6 +140,7 @@ private:
     float LaneHeightForIndex(int32 LaneIndex) const;
     int32 ExpandedTimingRowCount(int32 LaneIndex) const;
     float TimingRowTop(int32 LaneIndex, int32 RowIndex) const;
+    FExpansionToggleGeometry GetExpansionToggleGeometry(float BlockX0, float BlockX1, float BlockTop, float BlockHeight) const;
     float FrameToLocalX(const FGeometry& Geometry, double Frame) const;
     double LocalXToFrame(const FGeometry& Geometry, float X, bool bClampToView) const;
     double PixelsToFrames(const FGeometry& Geometry, float DeltaX) const;

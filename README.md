@@ -14,7 +14,7 @@ WeaverTimeline (source master)
 
 ## Source Version
 
-当前源码母版版本：`2`。
+当前源码母版版本：`3`。
 
 ## Core 组成
 
@@ -33,11 +33,15 @@ WeaverTimeline (source master)
 - Key 拖动
 - Block 整体拖动
 - Block 左右边界 Resize
+- Block Endpoint click 与 Resize threshold
 - Delete / Backspace 删除请求
 - Scrub
 - RMB 拖动水平 Pan
 - 鼠标滚轮 Zoom
 - 右键菜单请求入口
+- 空白 Lane RMB context 请求
+- Lane Header Action 请求
+- 可展开 Timing Rows、动态 Lane 高度与比例 Handle 编辑
 - 外部 ViewRange 模式
 - Mouse Capture / Escape / CaptureLost 生命周期
 
@@ -119,4 +123,4 @@ InputCore
 
 当前仓库已完成 CAK 通用编排能力的源码抽取基线：自绘 Timeline、Viewport Host/Overlay、Sequencer Sync Bridge 都已经进入 `Core/`。
 
-本仓库本身不是可直接启用的 `.uplugin`，所以这里 **不宣称 UE5 编译验证完成**。下一步应把 Version 2 Core 原样接入第一个消费者（优先 CineWeaver），让开发代理先读取本机 UE5 Skill，再按实际 UE5.8 工程规则修到编译通过。
+本仓库本身不是可直接启用的 `.uplugin`，所以这里 **不宣称 UE5 编译验证完成**。下一步应把 Version 3 Core 原样接入第一个消费者（优先 CineWeaver），让开发代理先读取本机 UE5 Skill，再按实际 UE5.8 工程规则修到编译通过。

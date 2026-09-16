@@ -16,12 +16,32 @@ enum class EWeaverBlockEditKind : uint8
     ResizeEnd
 };
 
+struct FWeaverLaneHeaderAction
+{
+    FName ActionId;
+    FText Label;
+    FName IconName;
+    FText Tooltip;
+    bool bToggled = false;
+    bool bEnabled = true;
+};
+
+struct FWeaverTimingRow
+{
+    FName RowId;
+    FText Label;
+    float StartRatio = 0.0f;
+    float EndRatio = 1.0f;
+    bool bEnabled = true;
+};
+
 struct FWeaverLane
 {
     FGuid LaneId;
     FText Label;
     FLinearColor AccentColor = FLinearColor(0.18f, 0.48f, 0.85f, 1.0f);
     bool bEnabled = true;
+    TArray<FWeaverLaneHeaderAction> HeaderActions;
 };
 
 struct FWeaverKey
@@ -43,6 +63,8 @@ struct FWeaverBlock
     FLinearColor Color = FLinearColor(0.2f, 0.45f, 0.8f, 0.8f);
     bool bEnabled = true;
     bool bResizable = true;
+    bool bExpanded = false;
+    TArray<FWeaverTimingRow> TimingRows;
 };
 
 struct FWeaverSelection

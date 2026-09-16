@@ -48,6 +48,15 @@ OnKeyEditStarted
 
 Block editing emits the same lifecycle with `EWeaverBlockEditKind` identifying Move / ResizeStart / ResizeEnd.
 
+Block endpoint interaction has a small pending phase. A left click on a block endpoint
+that stays below the drag threshold emits `OnBlockEndpointClicked(LaneId, BlockId,
+bStart)` and does not start a resize lifecycle. Once the pointer crosses the threshold,
+the normal block resize lifecycle begins.
+
+Timing rows use the same Started -> Changed -> Finished lifecycle as other edits. The
+adapter owns the meaning of `FWeaverTimingRow::RowId` and must restore its original
+ratios when `bCancelled == true`.
+
 The adapter should normally start its transaction or preview session on `Started`, update a preview or business candidate on `Changed`, and commit or revert on `Finished`.
 
 If `bCancelled == true`, the adapter must restore its original business state. This is used for Escape and unexpected mouse-capture loss.
@@ -83,6 +92,9 @@ The consumer should:
 
 `FWeaverViewportOverlay` only owns attachment to the active Level Editor viewport. It uses the same bottom-aligned overlay placement proven in CAK and rechecks the active viewport once per second.
 
+`SetVisible(false)` collapses the overlay root and removes it from hit testing while
+leaving registration, timeline data and all business/evaluation state intact.
+
 Neither layer may create business panels or reference Camera / CharacterAction / Audio systems directly.
 
 ## Context menu rule
@@ -91,8 +103,13 @@ Core distinguishes RMB click from RMB drag:
 
 - RMB drag: horizontal timeline pan.
 - RMB click on Key/Block: `OnContextRequested`.
+- RMB click on an empty track area: `OnLaneContextRequested(LaneId, Frame, ScreenPosition)`.
 
 Core does not build or register business menus. The adapter owns any menu UI.
+
+Lane header actions are presentation data in `FWeaverLane::HeaderActions`. An enabled
+action click emits `OnLaneHeaderActionRequested(LaneId, ActionId)`; the adapter owns
+the action's business meaning and toggled-state update.
 
 ## Delete rule
 

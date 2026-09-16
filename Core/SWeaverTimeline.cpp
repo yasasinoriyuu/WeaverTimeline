@@ -11,6 +11,10 @@ constexpr float BlockVerticalPadding = 4.0f;
 constexpr float LabelTextPadding = 10.0f;
 constexpr float BlockResizeHandleWidth = 7.0f;
 constexpr float RightPanThreshold = 4.0f;
+constexpr float PrimaryDragThreshold = 4.0f;
+constexpr float TimingRowHeight = 18.0f;
+constexpr float TimingRowHandleWidth = 5.0f;
+constexpr float ExpansionToggleSize = 10.0f;
 constexpr double MinBlockDurationFrames = 0.001;
 }
 
@@ -51,6 +55,13 @@ void SWeaverTimeline::Construct(const FArguments& InArgs)
     OnDeleteRequested = InArgs._OnDeleteRequested;
     OnContextRequested = InArgs._OnContextRequested;
     OnViewRangeChanged = InArgs._OnViewRangeChanged;
+    OnLaneHeaderActionRequested = InArgs._OnLaneHeaderActionRequested;
+    OnBlockEndpointClicked = InArgs._OnBlockEndpointClicked;
+    OnLaneContextRequested = InArgs._OnLaneContextRequested;
+    OnBlockExpansionChanged = InArgs._OnBlockExpansionChanged;
+    OnTimingRowEditStarted = InArgs._OnTimingRowEditStarted;
+    OnTimingRowEditChanged = InArgs._OnTimingRowEditChanged;
+    OnTimingRowEditFinished = InArgs._OnTimingRowEditFinished;
 }
 
 void SWeaverTimeline::SetLanes(TArray<FWeaverLane> InLanes)
@@ -68,7 +79,7 @@ void SWeaverTimeline::SetKeys(TArray<FWeaverKey> InKeys)
 void SWeaverTimeline::SetBlocks(TArray<FWeaverBlock> InBlocks)
 {
     Blocks = MoveTemp(InBlocks);
-    Invalidate(EInvalidateWidgetReason::Paint);
+    Invalidate(EInvalidateWidgetReason::Layout | EInvalidateWidgetReason::Paint);
 }
 
 void SWeaverTimeline::SetSelection(const FWeaverSelection& InSelection)
@@ -109,7 +120,12 @@ void SWeaverTimeline::SetHorizontalPadding(const float Left, const float Right)
 
 FVector2D SWeaverTimeline::ComputeDesiredSize(float LayoutScaleMultiplier) const
 {
-    return FVector2D(900.0f, RulerHeight + FMath::Max(1, Lanes.Num()) * LaneHeight);
+    float Height = RulerHeight;
+    for (int32 LaneIndex = 0; LaneIndex < Lanes.Num(); ++LaneIndex)
+    {
+        Height += LaneHeightForIndex(LaneIndex);
+    }
+    return FVector2D(900.0f, Height + (Lanes.Num() == 0 ? LaneHeight : 0.0f));
 }
 
 int32 SWeaverTimeline::FindLaneIndex(const FGuid& LaneId) const
@@ -152,7 +168,41 @@ float SWeaverTimeline::TrackRight(const FGeometry& Geometry) const
 
 float SWeaverTimeline::LaneTop(const int32 LaneIndex) const
 {
-    return RulerHeight + LaneIndex * LaneHeight;
+    float Top = RulerHeight;
+    for (int32 Index = 0; Index < LaneIndex; ++Index)
+    {
+        Top += LaneHeightForIndex(Index);
+    }
+    return Top;
+}
+
+int32 SWeaverTimeline::ExpandedTimingRowCount(const int32 LaneIndex) const
+{
+    if (!Lanes.IsValidIndex(LaneIndex))
+    {
+        return 0;
+    }
+
+    int32 MaxRows = 0;
+    const FGuid LaneId = Lanes[LaneIndex].LaneId;
+    for (const FWeaverBlock& Block : Blocks)
+    {
+        if (Block.LaneId == LaneId && Block.bExpanded)
+        {
+            MaxRows = FMath::Max(MaxRows, Block.TimingRows.Num());
+        }
+    }
+    return MaxRows;
+}
+
+float SWeaverTimeline::LaneHeightForIndex(const int32 LaneIndex) const
+{
+    return LaneHeight + ExpandedTimingRowCount(LaneIndex) * TimingRowHeight;
+}
+
+float SWeaverTimeline::TimingRowTop(const int32 LaneIndex, const int32 RowIndex) const
+{
+    return LaneTop(LaneIndex) + LaneHeight + RowIndex * TimingRowHeight;
 }
 
 float SWeaverTimeline::FrameToLocalX(const FGeometry& Geometry, const double Frame) const
@@ -229,6 +279,133 @@ void SWeaverTimeline::DrawRuler(
     }
 }
 
+void SWeaverTimeline::DrawLaneHeaderActions(
+    FSlateWindowElementList& OutDrawElements,
+    const int32 LayerId,
+    const FGeometry& Geometry,
+    const int32 LaneIndex) const
+{
+    if (!Lanes.IsValidIndex(LaneIndex))
+    {
+        return;
+    }
+
+    const FSlateBrush* WhiteBrush = FAppStyle::GetBrush("WhiteBrush");
+    const FSlateFontInfo Font = FAppStyle::GetFontStyle("SmallFont");
+    const FWeaverLane& Lane = Lanes[LaneIndex];
+    const float Top = LaneTop(LaneIndex);
+    const float ActionWidth = 18.0f;
+    const float StartX = FMath::Max(4.0f, LeftPadding - ActionWidth * Lane.HeaderActions.Num() - 4.0f);
+
+    for (int32 ActionIndex = 0; ActionIndex < Lane.HeaderActions.Num(); ++ActionIndex)
+    {
+        const FWeaverLaneHeaderAction& Action = Lane.HeaderActions[ActionIndex];
+        const float X = StartX + ActionIndex * ActionWidth;
+        const FLinearColor Fill = !Action.bEnabled
+            ? FLinearColor(1, 1, 1, 0.04f)
+            : (Action.bToggled ? Lane.AccentColor.CopyWithNewOpacity(0.55f) : FLinearColor(1, 1, 1, 0.10f));
+        FSlateDrawElement::MakeBox(
+            OutDrawElements,
+            LayerId,
+            Geometry.ToPaintGeometry(
+                FVector2f(ActionWidth - 2.0f, 18.0f),
+                FSlateLayoutTransform(FVector2f(X, Top + 7.0f))),
+            WhiteBrush,
+            ESlateDrawEffect::None,
+            Fill);
+
+        const FText ActionText = !Action.Label.IsEmpty()
+            ? Action.Label
+            : (Action.IconName.IsNone() ? FText::FromName(Action.ActionId) : FText::FromName(Action.IconName));
+        FSlateDrawElement::MakeText(
+            OutDrawElements,
+            LayerId + 1,
+            Geometry.ToPaintGeometry(
+                FVector2f(ActionWidth - 2.0f, 16.0f),
+                FSlateLayoutTransform(FVector2f(X, Top + 8.0f))),
+            ActionText,
+            Font,
+            ESlateDrawEffect::None,
+            Action.bEnabled ? FLinearColor::White : FLinearColor(1, 1, 1, 0.3f));
+    }
+}
+
+void SWeaverTimeline::DrawTimingRows(
+    FSlateWindowElementList& OutDrawElements,
+    const int32 LayerId,
+    const FGeometry& Geometry,
+    const FWeaverBlock& Block,
+    const int32 LaneIndex,
+    const float BlockX0,
+    const float BlockX1) const
+{
+    if (!Block.bExpanded || Block.TimingRows.Num() == 0 || !Lanes.IsValidIndex(LaneIndex))
+    {
+        return;
+    }
+
+    const FSlateBrush* WhiteBrush = FAppStyle::GetBrush("WhiteBrush");
+    const FSlateFontInfo Font = FAppStyle::GetFontStyle("SmallFont");
+    const float Width = FMath::Max(1.0f, BlockX1 - BlockX0);
+    for (int32 RowIndex = 0; RowIndex < Block.TimingRows.Num(); ++RowIndex)
+    {
+        const FWeaverTimingRow& Row = Block.TimingRows[RowIndex];
+        float StartRatio = FMath::Clamp(Row.StartRatio, 0.0f, 1.0f);
+        float EndRatio = FMath::Clamp(Row.EndRatio, StartRatio, 1.0f);
+        if (DragMode == EDragMode::TimingRow && DragTimingBlockId == Block.BlockId && DragTimingRowId == Row.RowId)
+        {
+            StartRatio = DragPreviewTimingStart;
+            EndRatio = DragPreviewTimingEnd;
+        }
+
+        const float Top = TimingRowTop(LaneIndex, RowIndex) + 2.0f;
+        FSlateDrawElement::MakeText(
+            OutDrawElements,
+            LayerId,
+            Geometry.ToPaintGeometry(
+                FVector2f(FMath::Max(20.0f, LeftPadding - 18.0f), TimingRowHeight - 2.0f),
+                FSlateLayoutTransform(FVector2f(LabelTextPadding + 8.0f, Top))),
+            Row.Label,
+            Font,
+            ESlateDrawEffect::None,
+            Row.bEnabled ? FLinearColor(0.72f, 0.74f, 0.78f, 1.0f) : FLinearColor(1, 1, 1, 0.3f));
+
+        const float X0 = BlockX0 + Width * StartRatio;
+        const float X1 = BlockX0 + Width * EndRatio;
+        FSlateDrawElement::MakeBox(
+            OutDrawElements,
+            LayerId,
+            Geometry.ToPaintGeometry(
+                FVector2f(FMath::Max(1.0f, X1 - X0), 8.0f),
+                FSlateLayoutTransform(FVector2f(X0, Top + 4.0f))),
+            WhiteBrush,
+            ESlateDrawEffect::None,
+            Block.Color.CopyWithNewOpacity(Row.bEnabled ? 0.55f : 0.2f));
+
+        if (Row.bEnabled)
+        {
+            FSlateDrawElement::MakeBox(
+                OutDrawElements,
+                LayerId + 1,
+                Geometry.ToPaintGeometry(
+                    FVector2f(2.0f, 12.0f),
+                    FSlateLayoutTransform(FVector2f(X0 - 1.0f, Top + 2.0f))),
+                WhiteBrush,
+                ESlateDrawEffect::None,
+                FLinearColor::White);
+            FSlateDrawElement::MakeBox(
+                OutDrawElements,
+                LayerId + 1,
+                Geometry.ToPaintGeometry(
+                    FVector2f(2.0f, 12.0f),
+                    FSlateLayoutTransform(FVector2f(X1 - 1.0f, Top + 2.0f))),
+                WhiteBrush,
+                ESlateDrawEffect::None,
+                FLinearColor::White);
+        }
+    }
+}
+
 void SWeaverTimeline::DrawDiamond(
     FSlateWindowElementList& OutDrawElements,
     const int32 LayerId,
@@ -301,13 +478,14 @@ int32 SWeaverTimeline::OnPaint(
     {
         const FWeaverLane& Lane = Lanes[LaneIndex];
         const float Top = LaneTop(LaneIndex);
+        const float LaneDrawHeight = LaneHeightForIndex(LaneIndex);
         if (LaneIndex % 2 == 1)
         {
             FSlateDrawElement::MakeBox(
                 OutDrawElements,
                 LayerId + 1,
                 AllottedGeometry.ToPaintGeometry(
-                    FVector2f(Size.X, LaneHeight),
+                    FVector2f(Size.X, LaneDrawHeight),
                     FSlateLayoutTransform(FVector2f(0.0f, Top))),
                 WhiteBrush,
                 ESlateDrawEffect::None,
@@ -334,6 +512,8 @@ int32 SWeaverTimeline::OnPaint(
             LabelFont,
             ESlateDrawEffect::None,
             Lane.bEnabled ? FLinearColor::White : FLinearColor(1, 1, 1, 0.35f));
+
+        DrawLaneHeaderActions(OutDrawElements, LayerId + 5, AllottedGeometry, LaneIndex);
     }
 
     for (const FWeaverBlock& Block : Blocks)
@@ -418,8 +598,39 @@ int32 SWeaverTimeline::OnPaint(
                 Block.Label,
                 FAppStyle::GetFontStyle("SmallFont"),
                 ESlateDrawEffect::None,
-                Block.bEnabled ? FLinearColor::White : FLinearColor(1, 1, 1, 0.35f));
+            Block.bEnabled ? FLinearColor::White : FLinearColor(1, 1, 1, 0.35f));
         }
+
+        if (Block.TimingRows.Num() > 0)
+        {
+            const TArray<FVector2f> Toggle =
+                Block.bExpanded
+                    ? TArray<FVector2f>
+                    {
+                        FVector2f(X0 + 5.0f, Top + 7.0f),
+                        FVector2f(X0 + 5.0f, Top + 15.0f),
+                        FVector2f(X0 + 10.0f, Top + 11.0f),
+                        FVector2f(X0 + 5.0f, Top + 7.0f)
+                    }
+                    : TArray<FVector2f>
+                    {
+                        FVector2f(X0 + 4.0f, Top + 8.0f),
+                        FVector2f(X0 + 12.0f, Top + 8.0f),
+                        FVector2f(X0 + 8.0f, Top + 13.0f),
+                        FVector2f(X0 + 4.0f, Top + 8.0f)
+                    };
+            FSlateDrawElement::MakeLines(
+                OutDrawElements,
+                LayerId + 8,
+                AllottedGeometry.ToPaintGeometry(),
+                Toggle,
+                ESlateDrawEffect::None,
+                FLinearColor::White,
+                true,
+                1.0f);
+        }
+
+        DrawTimingRows(OutDrawElements, LayerId + 8, AllottedGeometry, Block, LaneIndex, X0, X1);
     }
 
     for (const FWeaverKey& Key : Keys)
@@ -476,18 +687,49 @@ SWeaverTimeline::FHitResult SWeaverTimeline::HitTest(
     const FVector2D& Local) const
 {
     FHitResult Result;
-    if (Local.X < TrackLeft() || Local.Y < RulerHeight)
+    if (Local.Y < RulerHeight)
     {
         return Result;
     }
 
-    const int32 LaneIndex = FMath::FloorToInt((Local.Y - RulerHeight) / LaneHeight);
+    int32 LaneIndex = INDEX_NONE;
+    for (int32 Index = 0; Index < Lanes.Num(); ++Index)
+    {
+        const float Top = LaneTop(Index);
+        if (Local.Y >= Top && Local.Y < Top + LaneHeightForIndex(Index))
+        {
+            LaneIndex = Index;
+            break;
+        }
+    }
     if (!Lanes.IsValidIndex(LaneIndex))
     {
         return Result;
     }
 
     Result.LaneId = Lanes[LaneIndex].LaneId;
+
+    if (Local.X < TrackLeft())
+    {
+        const FWeaverLane& Lane = Lanes[LaneIndex];
+        const float ActionWidth = 18.0f;
+        const float StartX = FMath::Max(4.0f, LeftPadding - ActionWidth * Lane.HeaderActions.Num() - 4.0f);
+        if (Local.Y >= LaneTop(LaneIndex) + 7.0f && Local.Y <= LaneTop(LaneIndex) + 25.0f)
+        {
+            for (int32 ActionIndex = 0; ActionIndex < Lane.HeaderActions.Num(); ++ActionIndex)
+            {
+                const float X = StartX + ActionIndex * ActionWidth;
+                if (Local.X >= X && Local.X <= X + ActionWidth - 2.0f)
+                {
+                    Result.HeaderActionId = Lane.HeaderActions[ActionIndex].ActionId;
+                    Result.bHeaderAction = true;
+                    return Result;
+                }
+            }
+        }
+        return Result;
+    }
+
     Result.bTrackArea = true;
 
     for (int32 Index = Keys.Num() - 1; Index >= 0; --Index)
@@ -526,25 +768,64 @@ SWeaverTimeline::FHitResult SWeaverTimeline::HitTest(
 
         const float X0 = FrameToLocalX(Geometry, FMath::Min(DrawStart, DrawEnd));
         const float X1 = FrameToLocalX(Geometry, FMath::Max(DrawStart, DrawEnd));
-        if (Local.X < X0 || Local.X > X1)
+        const float BlockTop = LaneTop(LaneIndex) + BlockVerticalPadding;
+        const float BlockHeight = FMath::Max(1.0f, LaneHeight - BlockVerticalPadding * 2.0f);
+        const bool bInBlockBody = Local.Y >= BlockTop && Local.Y <= BlockTop + BlockHeight;
+        if (bInBlockBody && (Local.X < X0 || Local.X > X1))
         {
             continue;
         }
 
-        Result.BlockId = Block.BlockId;
-        Result.BlockEditKind = EWeaverBlockEditKind::Move;
-        if (Block.bResizable)
+        if (bInBlockBody)
         {
-            if (FMath::Abs(Local.X - X0) <= BlockResizeHandleWidth)
+            Result.BlockId = Block.BlockId;
+            Result.BlockEditKind = EWeaverBlockEditKind::Move;
+            if (Block.TimingRows.Num() > 0 && Local.X <= X0 + ExpansionToggleSize)
             {
-                Result.BlockEditKind = EWeaverBlockEditKind::ResizeStart;
+                Result.bExpansionToggle = true;
+                return Result;
             }
-            else if (FMath::Abs(Local.X - X1) <= BlockResizeHandleWidth)
+
+            if (Block.bResizable)
             {
-                Result.BlockEditKind = EWeaverBlockEditKind::ResizeEnd;
+                if (FMath::Abs(Local.X - X0) <= BlockResizeHandleWidth)
+                {
+                    Result.BlockEditKind = EWeaverBlockEditKind::ResizeStart;
+                    Result.bBlockEndpoint = true;
+                }
+                else if (FMath::Abs(Local.X - X1) <= BlockResizeHandleWidth)
+                {
+                    Result.BlockEditKind = EWeaverBlockEditKind::ResizeEnd;
+                    Result.bBlockEndpoint = true;
+                }
+            }
+            return Result;
+        }
+
+        if (Block.bExpanded && Local.X >= X0 && Local.X <= X1)
+        {
+            for (int32 RowIndex = 0; RowIndex < Block.TimingRows.Num(); ++RowIndex)
+            {
+                const FWeaverTimingRow& Row = Block.TimingRows[RowIndex];
+                const float RowTop = TimingRowTop(LaneIndex, RowIndex);
+                if (!Row.bEnabled || Local.Y < RowTop || Local.Y > RowTop + TimingRowHeight)
+                {
+                    continue;
+                }
+
+                const float Width = FMath::Max(1.0f, X1 - X0);
+                const float StartX = X0 + Width * FMath::Clamp(Row.StartRatio, 0.0f, 1.0f);
+                const float EndX = X0 + Width * FMath::Clamp(Row.EndRatio, Row.StartRatio, 1.0f);
+                if (FMath::Abs(Local.X - StartX) <= TimingRowHandleWidth || FMath::Abs(Local.X - EndX) <= TimingRowHandleWidth)
+                {
+                    Result.BlockId = Block.BlockId;
+                    Result.TimingRowId = Row.RowId;
+                    Result.bTimingRow = true;
+                    Result.bTimingStartHandle = FMath::Abs(Local.X - StartX) <= FMath::Abs(Local.X - EndX);
+                    return Result;
+                }
             }
         }
-        return Result;
     }
 
     return Result;
@@ -620,6 +901,60 @@ void SWeaverTimeline::BeginBlockDrag(
     OnBlockEditStarted.ExecuteIfBound(Block.LaneId, Block.BlockId, Kind);
 }
 
+void SWeaverTimeline::BeginTimingRowDrag(
+    const FWeaverBlock& Block,
+    const FWeaverTimingRow& Row,
+    const bool bStartHandle,
+    const FVector2D& Local)
+{
+    DragMode = EDragMode::TimingRow;
+    DragStartLocal = Local;
+    DragLaneId = Block.LaneId;
+    DragTimingBlockId = Block.BlockId;
+    DragTimingRowId = Row.RowId;
+    bDragTimingStartHandle = bStartHandle;
+    DragOriginalTimingStart = FMath::Clamp(Row.StartRatio, 0.0f, 1.0f);
+    DragOriginalTimingEnd = FMath::Clamp(Row.EndRatio, DragOriginalTimingStart, 1.0f);
+    DragPreviewTimingStart = DragOriginalTimingStart;
+    DragPreviewTimingEnd = DragOriginalTimingEnd;
+    OnTimingRowEditStarted.ExecuteIfBound(
+        Block.LaneId,
+        Block.BlockId,
+        Row.RowId,
+        DragOriginalTimingStart,
+        DragOriginalTimingEnd);
+}
+
+void SWeaverTimeline::FinishPendingEndpointClick()
+{
+    if (DragItemId.IsValid() && PendingEndpointKind != EWeaverBlockEditKind::Move)
+    {
+        OnBlockEndpointClicked.ExecuteIfBound(
+            DragLaneId,
+            DragItemId,
+            PendingEndpointKind == EWeaverBlockEditKind::ResizeStart);
+    }
+
+    DragMode = EDragMode::None;
+    DragLaneId.Invalidate();
+    DragItemId.Invalidate();
+    PendingEndpointKind = EWeaverBlockEditKind::Move;
+    Invalidate(EInvalidateWidgetReason::Paint);
+}
+
+void SWeaverTimeline::ToggleBlockExpansion(const FGuid& BlockId)
+{
+    if (FWeaverBlock* Block = Blocks.FindByPredicate([&BlockId](FWeaverBlock& Candidate)
+        {
+            return Candidate.BlockId == BlockId;
+        }))
+    {
+        Block->bExpanded = !Block->bExpanded;
+        OnBlockExpansionChanged.ExecuteIfBound(Block->BlockId, Block->bExpanded);
+        Invalidate(EInvalidateWidgetReason::Layout | EInvalidateWidgetReason::Paint);
+    }
+}
+
 void SWeaverTimeline::FinishPrimaryInteraction(const bool bCancelled)
 {
     if (DragMode == EDragMode::Key && DragItemId.IsValid())
@@ -633,6 +968,18 @@ void SWeaverTimeline::FinishPrimaryInteraction(const bool bCancelled)
         const double FinalEnd = bCancelled ? DragOriginalBlockEnd : DragPreviewBlockEnd;
         OnBlockEditFinished.ExecuteIfBound(DragLaneId, DragItemId, FinalStart, FinalEnd, bCancelled);
     }
+    else if (DragMode == EDragMode::TimingRow && DragTimingBlockId.IsValid())
+    {
+        const float FinalStart = bCancelled ? DragOriginalTimingStart : DragPreviewTimingStart;
+        const float FinalEnd = bCancelled ? DragOriginalTimingEnd : DragPreviewTimingEnd;
+        OnTimingRowEditFinished.ExecuteIfBound(
+            DragLaneId,
+            DragTimingBlockId,
+            DragTimingRowId,
+            FinalStart,
+            FinalEnd,
+            bCancelled);
+    }
 
     DragMode = EDragMode::None;
     DragLaneId.Invalidate();
@@ -644,6 +991,14 @@ void SWeaverTimeline::FinishPrimaryInteraction(const bool bCancelled)
     DragOriginalBlockEnd = 0.0;
     DragPreviewBlockStart = 0.0;
     DragPreviewBlockEnd = 0.0;
+    PendingEndpointKind = EWeaverBlockEditKind::Move;
+    DragTimingBlockId.Invalidate();
+    DragTimingRowId = NAME_None;
+    bDragTimingStartHandle = false;
+    DragOriginalTimingStart = 0.0f;
+    DragOriginalTimingEnd = 1.0f;
+    DragPreviewTimingStart = 0.0f;
+    DragPreviewTimingEnd = 1.0f;
     Invalidate(EInvalidateWidgetReason::Paint);
 }
 
@@ -665,6 +1020,27 @@ FReply SWeaverTimeline::OnMouseButtonDown(
 
     if (MouseEvent.GetEffectingButton() == EKeys::LeftMouseButton)
     {
+        if (Hit.bHeaderAction)
+        {
+            if (const FWeaverLane* Lane = Lanes.FindByPredicate([&Hit](const FWeaverLane& Candidate)
+                {
+                    return Candidate.LaneId == Hit.LaneId;
+                }))
+            {
+                if (const FWeaverLaneHeaderAction* Action = Lane->HeaderActions.FindByPredicate([&Hit](const FWeaverLaneHeaderAction& Candidate)
+                    {
+                        return Candidate.ActionId == Hit.HeaderActionId;
+                    }))
+                {
+                    if (Action->bEnabled)
+                    {
+                        OnLaneHeaderActionRequested.ExecuteIfBound(Hit.LaneId, Hit.HeaderActionId);
+                    }
+                }
+            }
+            return FReply::Handled().SetUserFocus(SharedThis(this), EFocusCause::Mouse);
+        }
+
         if (Hit.KeyId.IsValid())
         {
             ApplySelection(Hit.ToSelection(), true);
@@ -682,6 +1058,38 @@ FReply SWeaverTimeline::OnMouseButtonDown(
             ApplySelection(Hit.ToSelection(), true);
             if (const FWeaverBlock* Block = FindBlock(Hit.BlockId))
             {
+                if (Hit.bExpansionToggle)
+                {
+                    ToggleBlockExpansion(Block->BlockId);
+                    return FReply::Handled().SetUserFocus(SharedThis(this), EFocusCause::Mouse);
+                }
+
+                if (Hit.bTimingRow)
+                {
+                    if (const FWeaverTimingRow* Row = Block->TimingRows.FindByPredicate([&Hit](const FWeaverTimingRow& Candidate)
+                        {
+                            return Candidate.RowId == Hit.TimingRowId;
+                        }))
+                    {
+                        BeginTimingRowDrag(*Block, *Row, Hit.bTimingStartHandle, Local);
+                        return FReply::Handled()
+                            .CaptureMouse(SharedThis(this))
+                            .SetUserFocus(SharedThis(this), EFocusCause::Mouse);
+                    }
+                }
+
+                if (Hit.bBlockEndpoint)
+                {
+                    DragMode = EDragMode::PendingBlockEndpoint;
+                    DragStartLocal = Local;
+                    DragLaneId = Block->LaneId;
+                    DragItemId = Block->BlockId;
+                    PendingEndpointKind = Hit.BlockEditKind;
+                    return FReply::Handled()
+                        .CaptureMouse(SharedThis(this))
+                        .SetUserFocus(SharedThis(this), EFocusCause::Mouse);
+                }
+
                 BeginBlockDrag(*Block, Hit.BlockEditKind, Local);
                 return FReply::Handled()
                     .CaptureMouse(SharedThis(this))
@@ -741,6 +1149,13 @@ FReply SWeaverTimeline::OnMouseButtonUp(
                     ContextSelection.ItemId,
                     RightPressScreen);
             }
+            else if (RightPressHit.bTrackArea && RightPressHit.LaneId.IsValid())
+            {
+                OnLaneContextRequested.ExecuteIfBound(
+                    RightPressHit.LaneId,
+                    LocalXToFrame(MyGeometry, RightPressLocal.X, true),
+                    RightPressScreen);
+            }
         }
 
         ResetRightMouseState();
@@ -749,7 +1164,14 @@ FReply SWeaverTimeline::OnMouseButtonUp(
 
     if (MouseEvent.GetEffectingButton() == EKeys::LeftMouseButton && DragMode != EDragMode::None)
     {
-        FinishPrimaryInteraction(false);
+        if (DragMode == EDragMode::PendingBlockEndpoint)
+        {
+            FinishPendingEndpointClick();
+        }
+        else
+        {
+            FinishPrimaryInteraction(false);
+        }
         return FReply::Handled().ReleaseMouseCapture();
     }
 
@@ -781,6 +1203,21 @@ FReply SWeaverTimeline::OnMouseMove(
     {
         UpdateHover(MyGeometry, Local);
         return FReply::Unhandled();
+    }
+
+    if (DragMode == EDragMode::PendingBlockEndpoint)
+    {
+        if (FVector2D::Distance(Local, DragStartLocal) >= PrimaryDragThreshold)
+        {
+            if (const FWeaverBlock* Block = FindBlock(DragItemId))
+            {
+                BeginBlockDrag(*Block, PendingEndpointKind, DragStartLocal);
+            }
+        }
+        else
+        {
+            return FReply::Handled();
+        }
     }
 
     if (DragMode == EDragMode::Scrub)
@@ -830,6 +1267,39 @@ FReply SWeaverTimeline::OnMouseMove(
             DragPreviewBlockEnd);
         Invalidate(EInvalidateWidgetReason::Paint);
         return FReply::Handled();
+    }
+
+    if (DragMode == EDragMode::TimingRow && DragTimingBlockId.IsValid())
+    {
+        const FWeaverBlock* Block = FindBlock(DragTimingBlockId);
+        if (Block)
+        {
+            const double DrawStart = Block->StartFrame;
+            const double DrawEnd = Block->EndFrame;
+            const float X0 = FrameToLocalX(MyGeometry, FMath::Min(DrawStart, DrawEnd));
+            const float X1 = FrameToLocalX(MyGeometry, FMath::Max(DrawStart, DrawEnd));
+            const float Width = FMath::Max(1.0f, X1 - X0);
+            const float Ratio = FMath::Clamp((Local.X - X0) / Width, 0.0f, 1.0f);
+            if (bDragTimingStartHandle)
+            {
+                DragPreviewTimingStart = FMath::Min(Ratio, DragPreviewTimingEnd - 0.001f);
+                DragPreviewTimingStart = FMath::Clamp(DragPreviewTimingStart, 0.0f, 1.0f);
+            }
+            else
+            {
+                DragPreviewTimingEnd = FMath::Max(Ratio, DragPreviewTimingStart + 0.001f);
+                DragPreviewTimingEnd = FMath::Clamp(DragPreviewTimingEnd, 0.0f, 1.0f);
+            }
+
+            OnTimingRowEditChanged.ExecuteIfBound(
+                Block->LaneId,
+                DragTimingBlockId,
+                DragTimingRowId,
+                DragPreviewTimingStart,
+                DragPreviewTimingEnd);
+            Invalidate(EInvalidateWidgetReason::Paint);
+            return FReply::Handled();
+        }
     }
 
     return FReply::Unhandled();

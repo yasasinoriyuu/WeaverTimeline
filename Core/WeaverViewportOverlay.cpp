@@ -4,11 +4,12 @@
 #include "LevelEditor.h"
 #include "Modules/ModuleManager.h"
 #include "SWeaverTimelineHost.h"
-#include "Widgets/Layout/SOverlay.h"
+#include "Widgets/SOverlay.h"
 
 FWeaverViewportOverlay::~FWeaverViewportOverlay()
 {
     Unregister();
+    bVisible = true;
 }
 
 void FWeaverViewportOverlay::Register(
@@ -34,6 +35,8 @@ void FWeaverViewportOverlay::Register(
             ]
         ];
 
+    SetVisible(bVisible);
+
     TickerHandle = FTSTicker::GetCoreTicker().AddTicker(
         FTickerDelegate::CreateRaw(this, &FWeaverViewportOverlay::Tick),
         1.0f);
@@ -51,6 +54,15 @@ void FWeaverViewportOverlay::Unregister()
 
     DetachFromViewport();
     OverlayWidget.Reset();
+}
+
+void FWeaverViewportOverlay::SetVisible(const bool bInVisible)
+{
+    bVisible = bInVisible;
+    if (OverlayWidget.IsValid())
+    {
+        OverlayWidget->SetVisibility(bVisible ? EVisibility::SelfHitTestInvisible : EVisibility::Collapsed);
+    }
 }
 
 bool FWeaverViewportOverlay::Tick(float DeltaTime)

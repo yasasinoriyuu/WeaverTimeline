@@ -21,8 +21,10 @@ public:
         const FText& InCollapsedLabel,
         float InExpandedHeight = 300.0f);
     void Unregister();
+    void SetVisible(bool bInVisible);
 
     bool IsRegistered() const { return OverlayWidget.IsValid(); }
+    bool IsVisible() const { return bVisible; }
 
 private:
     bool Tick(float DeltaTime);
@@ -32,4 +34,5 @@ private:
     TSharedPtr<SWidget> OverlayWidget;
     TWeakPtr<IAssetViewport> AttachedViewport;
     FTSTicker::FDelegateHandle TickerHandle;
+    bool bVisible = true;
 };

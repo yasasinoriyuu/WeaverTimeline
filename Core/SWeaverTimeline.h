@@ -15,6 +15,13 @@ DECLARE_DELEGATE_FiveParams(FOnWeaverBlockEditFinished, FGuid, FGuid, double, do
 DECLARE_DELEGATE_ThreeParams(FOnWeaverDeleteRequested, EWeaverItemType, FGuid, FGuid)
 DECLARE_DELEGATE_FourParams(FOnWeaverContextRequested, EWeaverItemType, FGuid, FGuid, FVector2D)
 DECLARE_DELEGATE_TwoParams(FOnWeaverViewRangeChanged, double, double)
+DECLARE_DELEGATE_TwoParams(FOnWeaverLaneHeaderActionRequested, FGuid, FName)
+DECLARE_DELEGATE_ThreeParams(FOnWeaverBlockEndpointClicked, FGuid, FGuid, bool)
+DECLARE_DELEGATE_ThreeParams(FOnWeaverLaneContextRequested, FGuid, double, FVector2D)
+DECLARE_DELEGATE_TwoParams(FOnWeaverBlockExpansionChanged, FGuid, bool)
+DECLARE_DELEGATE_FiveParams(FOnWeaverTimingRowEditStarted, FGuid, FGuid, FName, float, float)
+DECLARE_DELEGATE_FiveParams(FOnWeaverTimingRowEditChanged, FGuid, FGuid, FName, float, float)
+DECLARE_DELEGATE_SixParams(FOnWeaverTimingRowEditFinished, FGuid, FGuid, FName, float, float, bool)
 
 class SWeaverTimeline final : public SLeafWidget
 {
@@ -40,6 +47,13 @@ public:
         SLATE_EVENT(FOnWeaverDeleteRequested, OnDeleteRequested)
         SLATE_EVENT(FOnWeaverContextRequested, OnContextRequested)
         SLATE_EVENT(FOnWeaverViewRangeChanged, OnViewRangeChanged)
+        SLATE_EVENT(FOnWeaverLaneHeaderActionRequested, OnLaneHeaderActionRequested)
+        SLATE_EVENT(FOnWeaverBlockEndpointClicked, OnBlockEndpointClicked)
+        SLATE_EVENT(FOnWeaverLaneContextRequested, OnLaneContextRequested)
+        SLATE_EVENT(FOnWeaverBlockExpansionChanged, OnBlockExpansionChanged)
+        SLATE_EVENT(FOnWeaverTimingRowEditStarted, OnTimingRowEditStarted)
+        SLATE_EVENT(FOnWeaverTimingRowEditChanged, OnTimingRowEditChanged)
+        SLATE_EVENT(FOnWeaverTimingRowEditFinished, OnTimingRowEditFinished)
     SLATE_END_ARGS()
 
     void Construct(const FArguments& InArgs);
@@ -80,7 +94,9 @@ private:
         None,
         Scrub,
         Key,
-        Block
+        Block,
+        PendingBlockEndpoint,
+        TimingRow
     };
 
     struct FHitResult
@@ -88,7 +104,14 @@ private:
         FGuid LaneId;
         FGuid KeyId;
         FGuid BlockId;
+        FName HeaderActionId;
+        FName TimingRowId;
         EWeaverBlockEditKind BlockEditKind = EWeaverBlockEditKind::Move;
+        bool bHeaderAction = false;
+        bool bExpansionToggle = false;
+        bool bTimingRow = false;
+        bool bTimingStartHandle = false;
+        bool bBlockEndpoint = false;
         bool bTrackArea = false;
 
         FWeaverSelection ToSelection() const;
@@ -101,12 +124,17 @@ private:
     float TrackLeft() const;
     float TrackRight(const FGeometry& Geometry) const;
     float LaneTop(int32 LaneIndex) const;
+    float LaneHeightForIndex(int32 LaneIndex) const;
+    int32 ExpandedTimingRowCount(int32 LaneIndex) const;
+    float TimingRowTop(int32 LaneIndex, int32 RowIndex) const;
     float FrameToLocalX(const FGeometry& Geometry, double Frame) const;
     double LocalXToFrame(const FGeometry& Geometry, float X, bool bClampToView) const;
     double PixelsToFrames(const FGeometry& Geometry, float DeltaX) const;
 
     FHitResult HitTest(const FGeometry& Geometry, const FVector2D& Local) const;
     void DrawRuler(FSlateWindowElementList& OutDrawElements, int32 LayerId, const FGeometry& Geometry) const;
+    void DrawLaneHeaderActions(FSlateWindowElementList& OutDrawElements, int32 LayerId, const FGeometry& Geometry, int32 LaneIndex) const;
+    void DrawTimingRows(FSlateWindowElementList& OutDrawElements, int32 LayerId, const FGeometry& Geometry, const FWeaverBlock& Block, int32 LaneIndex, float BlockX0, float BlockX1) const;
     void DrawDiamond(
         FSlateWindowElementList& OutDrawElements,
         int32 LayerId,
@@ -123,6 +151,9 @@ private:
     void UpdateHover(const FGeometry& Geometry, const FVector2D& Local);
     void BeginKeyDrag(const FWeaverKey& Key, const FVector2D& Local);
     void BeginBlockDrag(const FWeaverBlock& Block, EWeaverBlockEditKind Kind, const FVector2D& Local);
+    void BeginTimingRowDrag(const FWeaverBlock& Block, const FWeaverTimingRow& Row, bool bStartHandle, const FVector2D& Local);
+    void FinishPendingEndpointClick();
+    void ToggleBlockExpansion(const FGuid& BlockId);
     void FinishPrimaryInteraction(bool bCancelled);
     void ResetRightMouseState();
 
@@ -138,6 +169,13 @@ private:
     FOnWeaverDeleteRequested OnDeleteRequested;
     FOnWeaverContextRequested OnContextRequested;
     FOnWeaverViewRangeChanged OnViewRangeChanged;
+    FOnWeaverLaneHeaderActionRequested OnLaneHeaderActionRequested;
+    FOnWeaverBlockEndpointClicked OnBlockEndpointClicked;
+    FOnWeaverLaneContextRequested OnLaneContextRequested;
+    FOnWeaverBlockExpansionChanged OnBlockExpansionChanged;
+    FOnWeaverTimingRowEditStarted OnTimingRowEditStarted;
+    FOnWeaverTimingRowEditChanged OnTimingRowEditChanged;
+    FOnWeaverTimingRowEditFinished OnTimingRowEditFinished;
 
     TArray<FWeaverLane> Lanes;
     TArray<FWeaverKey> Keys;
@@ -168,6 +206,15 @@ private:
     double DragOriginalBlockEnd = 0.0;
     double DragPreviewBlockStart = 0.0;
     double DragPreviewBlockEnd = 0.0;
+
+    EWeaverBlockEditKind PendingEndpointKind = EWeaverBlockEditKind::Move;
+    FGuid DragTimingBlockId;
+    FName DragTimingRowId;
+    bool bDragTimingStartHandle = false;
+    float DragOriginalTimingStart = 0.0f;
+    float DragOriginalTimingEnd = 1.0f;
+    float DragPreviewTimingStart = 0.0f;
+    float DragPreviewTimingEnd = 1.0f;
 
     bool bRightButtonDown = false;
     bool bRightPressMoved = false;

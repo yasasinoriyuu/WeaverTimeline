@@ -77,6 +77,38 @@ void FWeaverSequencerBridge::Unregister()
     DisplayRateProvider = FDisplayRateProvider();
     OnSequencerFrameChanged.Unbind();
     OnContextChanged.Unbind();
+    ExplicitSequencer.Reset();
+    bExplicitBinding = false;
+    bEmbeddedLayout = false;
+}
+
+void FWeaverSequencerBridge::RegisterForSequencer(
+    const TSharedRef<SWeaverTimeline>& InTimeline, TWeakPtr<ISequencer> InSequencer,
+    FDisplayRateProvider InDisplayRateProvider,
+    FOnWeaverSequencerFrameChanged InOnSequencerFrameChanged, FSimpleDelegate InOnContextChanged, bool bInEmbeddedLayout)
+{
+    Unregister();
+    Timeline = InTimeline;
+    ExplicitSequencer = InSequencer;
+    bExplicitBinding = true;
+    bEmbeddedLayout = bInEmbeddedLayout;
+    DisplayRateProvider = MoveTemp(InDisplayRateProvider);
+    OnSequencerFrameChanged = MoveTemp(InOnSequencerFrameChanged);
+    OnContextChanged = MoveTemp(InOnContextChanged);
+    bRegistered = true;
+    RefreshBinding(); // No global discovery ticker for an explicitly owned section.
+}
+
+void FWeaverSequencerBridge::HandleSequencerClosed(TSharedRef<ISequencer> Closed)
+{
+    if (Sequencer.Pin() != Closed) { return; }
+    if (bExplicitBinding) { ExplicitSequencer.Reset(); }
+    DetachSequencer(); // A still-alive, closed ISequencer must never receive later scrub writes.
+}
+
+void FWeaverSequencerBridge::HandleSequenceActivated(FMovieSceneSequenceIDRef)
+{
+    RefreshBinding();
 }
 
 bool FWeaverSequencerBridge::TickBinding(float DeltaTime)
@@ -88,7 +120,8 @@ bool FWeaverSequencerBridge::TickBinding(float DeltaTime)
 void FWeaverSequencerBridge::RefreshBinding()
 {
     if (!bRegistered) { return; }
-    TSharedPtr<ISequencer> Candidate;
+    TSharedPtr<ISequencer> Candidate = bExplicitBinding ? ExplicitSequencer.Pin() : nullptr;
+    if (!bExplicitBinding)
     for (const TWeakPtr<ISequencer>& WeakSequencer :
         FLevelEditorSequencerIntegration::Get().GetSequencers())
     {
@@ -101,9 +134,11 @@ void FWeaverSequencerBridge::RefreshBinding()
 
     if (Candidate == Sequencer.Pin())
     {
-        if (Candidate && FocusedSequence.Get() != Candidate->GetFocusedMovieSceneSequence())
+        if (Candidate && (FocusedSequence.Get() != Candidate->GetFocusedMovieSceneSequence()
+            || FocusedTemplate != Candidate->GetFocusedTemplateID()))
         {
             FocusedSequence = Candidate->GetFocusedMovieSceneSequence();
+            FocusedTemplate = Candidate->GetFocusedTemplateID();
             OnContextChanged.ExecuteIfBound();
         }
         return;
@@ -116,13 +151,18 @@ void FWeaverSequencerBridge::RefreshBinding()
     if (Candidate.IsValid())
     {
         FocusedSequence = Candidate->GetFocusedMovieSceneSequence();
+        FocusedTemplate = Candidate->GetFocusedTemplateID();
         OnContextChanged.ExecuteIfBound();
         if (!bRegistered || Sequencer.Pin() != Candidate) { return; }
-        SequencerTrackAreaWidget = FindWeaverTrackAreaWidgetRecursive(
-            Candidate->GetSequencerWidget());
+        // MakeSectionInterface runs while SSequencer is still being constructed.
+        // Its widget is not available yet; native hosts resolve geometry on their first Tick.
+        if (!bExplicitBinding)
+        { SequencerTrackAreaWidget = FindWeaverTrackAreaWidgetRecursive(Candidate->GetSequencerWidget()); }
         SequencerTimeChangedHandle = Candidate->OnGlobalTimeChanged().AddRaw(
             this,
             &FWeaverSequencerBridge::HandleSequencerTimeChanged);
+        SequencerClosedHandle = Candidate->OnCloseEvent().AddRaw(this, &FWeaverSequencerBridge::HandleSequencerClosed);
+        SequenceActivatedHandle = Candidate->OnActivateSequence().AddRaw(this, &FWeaverSequencerBridge::HandleSequenceActivated);
         HandleSequencerTimeChanged();
     }
 }
@@ -136,9 +176,13 @@ void FWeaverSequencerBridge::DetachSequencer()
         {
             Previous->OnGlobalTimeChanged().Remove(SequencerTimeChangedHandle);
         }
+        Previous->OnCloseEvent().Remove(SequencerClosedHandle);
+        Previous->OnActivateSequence().Remove(SequenceActivatedHandle);
     }
 
     SequencerTimeChangedHandle.Reset();
+    SequencerClosedHandle.Reset();
+    SequenceActivatedHandle.Reset();
     SequencerTrackAreaWidget.Reset();
     Sequencer.Reset();
     FocusedSequence.Reset();
@@ -181,10 +225,12 @@ void FWeaverSequencerBridge::PushTimelineFrame(const double NewFrame)
     }
 
     const FFrameRate TimelineRate = ResolveDisplayRate(ActiveSequencer);
+    const FFrameRate TickRate = ActiveSequencer->GetFocusedTickResolution();
+    if (!TimelineRate.IsValid() || TimelineRate.Numerator <= 0 || !TickRate.IsValid() || TickRate.Numerator <= 0) { return; }
     const FFrameTime TickTime = FFrameRate::TransformTime(
         FFrameTime::FromDecimal(NewFrame),
         TimelineRate,
-        ActiveSequencer->GetFocusedTickResolution());
+        TickRate);
 
     ActiveSequencer->SetLocalTimeDirectly(TickTime, true);
 }
@@ -237,8 +283,10 @@ void FWeaverSequencerBridge::Sync(const FGeometry& TimelineGeometry)
             ViewRange.GetUpperBoundValue() * FramesPerSecond);
     }
 
-    TSharedPtr<SWidget> TrackArea = SequencerTrackAreaWidget.Pin();
-    if (!TrackArea.IsValid())
+    // Native section content already occupies the time area; applying viewport alignment
+    // a second time shifts blocks away from the native ruler (CAK SectionTrack skips it too).
+    TSharedPtr<SWidget> TrackArea = bEmbeddedLayout ? nullptr : SequencerTrackAreaWidget.Pin();
+    if (!bEmbeddedLayout && !TrackArea.IsValid())
     {
         TrackArea = FindWeaverTrackAreaWidgetRecursive(ActiveSequencer->GetSequencerWidget());
         SequencerTrackAreaWidget = TrackArea;
@@ -274,7 +322,7 @@ void FWeaverSequencerBridge::Sync(const FGeometry& TimelineGeometry)
         }
     }
 
-    if (ActiveSequencer->GetPlaybackStatus() == EMovieScenePlayerStatus::Playing)
+    if (bExplicitBinding || ActiveSequencer->GetPlaybackStatus() == EMovieScenePlayerStatus::Playing)
     {
         // CAK proved that OnGlobalTimeChanged can be too coarse during playback
         // in some settings. Pull the sub-frame local time once per Slate tick.
@@ -294,6 +342,8 @@ void FWeaverSequencerBridge::HandleSequencerTimeChanged()
 
     const FFrameRate TimelineRate = ResolveDisplayRate(ActiveSequencer);
     const FQualifiedFrameTime LocalTime = ActiveSequencer->GetLocalTime();
+    // During native section construction the owner's time base can still be uninitialized.
+    if (!TimelineRate.IsValid() || TimelineRate.Numerator <= 0 || !LocalTime.Rate.IsValid() || LocalTime.Rate.Numerator <= 0) { return; }
     const double NewCurrentFrame = FFrameRate::TransformTime(
         LocalTime.Time,
         LocalTime.Rate,

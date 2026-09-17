@@ -9,10 +9,14 @@
 class SWeaverEditableTimeline final : public SCompoundWidget
 {
 public:
-    SLATE_BEGIN_ARGS(SWeaverEditableTimeline) : _SyncSequencer(false), _JumpToEndpointOnClick(true) {}
+    SLATE_BEGIN_ARGS(SWeaverEditableTimeline) : _SyncSequencer(false), _JumpToEndpointOnClick(true), _EmbeddedInSequencer(false), _AllowTrackAreaScrub(true) {}
         SLATE_ARGUMENT(TSharedPtr<IWeaverTimelineEditAdapter>, Adapter)
         SLATE_ARGUMENT(bool, SyncSequencer)
         SLATE_ARGUMENT(bool, JumpToEndpointOnClick)
+        /** Uses the owning editor explicitly. Embedded mode never falls back to global discovery. */
+        SLATE_ARGUMENT(TWeakPtr<ISequencer>, SequencerSource)
+        SLATE_ARGUMENT(bool, EmbeddedInSequencer)
+        SLATE_ARGUMENT(bool, AllowTrackAreaScrub)
         SLATE_ARGUMENT(FWeaverSequencerBridge::FDisplayRateProvider, DisplayRateProvider)
         SLATE_EVENT(FOnWeaverFrameChanged, OnFrameChanged)
         SLATE_EVENT(FOnWeaverSelectionChanged, OnSelectionChanged)
@@ -26,6 +30,8 @@ public:
     TSharedRef<FWeaverTimelineEditController> GetController() const { return Controller.ToSharedRef(); }
     TSharedRef<SWeaverTimeline> GetTimeline() const { return Timeline.ToSharedRef(); }
     void Deactivate();
+    /** Terminal owner teardown, including when another Slate parent still retains this widget. */
+    void Shutdown();
     void SetCurrentFrame(double Frame);
     double GetCurrentFrame() const { return CurrentFrame; }
 private:
@@ -39,4 +45,6 @@ private:
     bool bJumpToEndpointOnClick = true;
     double CurrentFrame = 0;
     bool bNotifyingFrame = false;
+    bool bShutdown = false;
+    bool bRequiresOwner = false;
 };

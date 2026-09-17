@@ -8,22 +8,88 @@
 #include "Editor.h"
 #include "SWeaverEditableTimeline.h"
 #include "WeaverTimelineReferenceAdapter.h"
+#include "ISequencerModule.h"
+#include "WeaverReferenceTrackEditor.h"
+#include "WeaverReferenceTrack.h"
+#include "LevelSequence.h"
+#include "MovieScene.h"
+#include "HAL/IConsoleManager.h"
+#include "Framework/Application/SlateApplication.h"
+#include "Widgets/SWindow.h"
+#include "ViewRangeInterpolation.h"
+#include "Misc/CoreDelegates.h"
+#include "SequencerSettings.h"
 
 class FWeaverTimelineReferenceModule : public IModuleInterface
 {
 public:
     virtual void StartupModule() override
     {
+        TrackEditorHandle = FModuleManager::LoadModuleChecked<ISequencerModule>(TEXT("Sequencer"))
+            .RegisterTrackEditor(FOnCreateTrackEditor::CreateStatic(&FWeaverReferenceTrackEditor::Create));
+        DemoCommand = MakeUnique<FAutoConsoleCommand>(TEXT("Weaver.ReferenceEmbedded"),
+            TEXT("Open a transient native Sequencer containing the embedded reference root track."),
+            FConsoleCommandDelegate::CreateRaw(this, &FWeaverTimelineReferenceModule::OpenEmbeddedDemo));
+        PreExitHandle = FCoreDelegates::OnEnginePreExit.AddRaw(this, &FWeaverTimelineReferenceModule::CloseEmbeddedDemo);
         FGlobalTabmanager::Get()->RegisterNomadTabSpawner(TEXT("WeaverTimelineReference"),
             FOnSpawnTab::CreateRaw(this, &FWeaverTimelineReferenceModule::SpawnTab))
             .SetDisplayName(FText::FromString(TEXT("Weaver 编排参考")));
     }
     virtual void ShutdownModule() override
     {
+        DemoCommand.Reset();
+        FCoreDelegates::OnEnginePreExit.Remove(PreExitHandle);
+        CloseEmbeddedDemo();
+        if (auto* Module = FModuleManager::GetModulePtr<ISequencerModule>(TEXT("Sequencer")))
+        { Module->UnRegisterTrackEditor(TrackEditorHandle); }
         FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(TEXT("WeaverTimelineReference"));
         if (auto Tab = OpenTab.Pin()) { Tab->RequestCloseTab(); }
     }
 private:
+    void ReleaseEmbeddedDemo()
+    {
+        if (DemoSequencer)
+        {
+            auto Owner = MoveTemp(DemoSequencer);
+            Owner->Close();
+        }
+        DemoSequence.Reset();
+        DemoWindow.Reset();
+    }
+    void CloseEmbeddedDemo()
+    {
+        auto Window = DemoWindow.Pin();
+        if (Window) { Window->SetOnWindowClosed(FOnWindowClosed()); }
+        ReleaseEmbeddedDemo();
+        if (Window) { Window->RequestDestroyWindow(); }
+    }
+    void OpenEmbeddedDemo()
+    {
+        if (auto Window = DemoWindow.Pin()) { Window->BringToFront(); return; }
+        if (DemoSequencer) { DemoSequencer->Close(); DemoSequencer.Reset(); }
+        DemoSequence.Reset(NewObject<ULevelSequence>(GetTransientPackage(), NAME_None, RF_Transactional));
+        DemoSequence->Initialize();
+        auto* Scene = DemoSequence->GetMovieScene();
+        Scene->SetDisplayRate(FFrameRate(30, 1));
+        Scene->SetPlaybackRange(0, 192000);
+        auto* Track = Scene->AddTrack<UWeaverReferenceTrack>();
+        Track->AddSection(*Track->CreateNewSection());
+        FSequencerInitParams Params;
+        Params.RootSequence = DemoSequence.Get();
+        Params.ViewParams.UniqueName = TEXT("WeaverV7EmbeddedDemo");
+        // SSequencer reads its initial outliner width during construction.
+        auto* Settings = USequencerSettingsContainer::GetOrCreate<USequencerSettings>(*Params.ViewParams.UniqueName);
+        Settings->SetTreeViewWidth(400.f);
+        Settings->SetTimeDisplayFormat(EFrameNumberDisplayFormats::Frames);
+        DemoSequencer = FModuleManager::LoadModuleChecked<ISequencerModule>(TEXT("Sequencer")).CreateSequencer(Params);
+        DemoSequencer->SetViewRange(TRange<double>(0, 8), EViewRangeInterpolation::Immediate);
+        auto Window = SNew(SWindow).Title(FText::FromString(TEXT("Weaver V7 · Sequencer 顶层嵌入验证")))
+            .ClientSize(FVector2D(1200, 550))[DemoSequencer->GetSequencerWidget()];
+        Window->SetOnWindowClosed(FOnWindowClosed::CreateLambda([this](const TSharedRef<SWindow>&)
+        { ReleaseEmbeddedDemo(); }));
+        DemoWindow = Window;
+        FSlateApplication::Get().AddWindow(Window);
+    }
     TSharedRef<SDockTab> SpawnTab(const FSpawnTabArgs&)
     {
         auto Adapter = MakeShared<FWeaverTimelineReferenceAdapter>();
@@ -83,6 +149,12 @@ private:
         return Tab;
     }
     TWeakPtr<SDockTab> OpenTab;
+    FDelegateHandle TrackEditorHandle;
+    FDelegateHandle PreExitHandle;
+    TUniquePtr<FAutoConsoleCommand> DemoCommand;
+    TStrongObjectPtr<ULevelSequence> DemoSequence;
+    TSharedPtr<ISequencer> DemoSequencer;
+    TWeakPtr<SWindow> DemoWindow;
 };
 
 IMPLEMENT_MODULE(FWeaverTimelineReferenceModule, WeaverTimelineReference)

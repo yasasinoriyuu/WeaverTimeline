@@ -4,6 +4,7 @@
 #include "CoreMinimal.h"
 #include "Layout/Geometry.h"
 #include "Misc/FrameRate.h"
+#include "MovieSceneSequenceID.h"
 
 class ISequencer;
 class SWidget;
@@ -38,6 +39,15 @@ public:
         FSimpleDelegate InOnContextChanged = FSimpleDelegate());
     void Unregister();
 
+    /** Native section hosts must bind their owner, never discover another editor window. */
+    void RegisterForSequencer(
+        const TSharedRef<SWeaverTimeline>& InTimeline,
+        TWeakPtr<ISequencer> InSequencer,
+        FDisplayRateProvider InDisplayRateProvider,
+        FOnWeaverSequencerFrameChanged InOnSequencerFrameChanged,
+        FSimpleDelegate InOnContextChanged = FSimpleDelegate(),
+        bool bInEmbeddedLayout = false);
+
     /** Call from the owning Slate widget's Tick using the timeline widget geometry. */
     void Sync(const FGeometry& TimelineGeometry);
 
@@ -55,18 +65,26 @@ private:
     void RefreshBinding();
     void HandleSequencerTimeChanged();
     void DetachSequencer();
+    void HandleSequencerClosed(TSharedRef<ISequencer> Closed);
+    void HandleSequenceActivated(FMovieSceneSequenceIDRef);
     FFrameRate ResolveDisplayRate(const TSharedPtr<ISequencer>& ActiveSequencer) const;
 
     TWeakPtr<SWeaverTimeline> Timeline;
     TWeakPtr<ISequencer> Sequencer;
     TWeakPtr<SWidget> SequencerTrackAreaWidget;
     FDelegateHandle SequencerTimeChangedHandle;
+    FDelegateHandle SequencerClosedHandle;
+    FDelegateHandle SequenceActivatedHandle;
+    TWeakPtr<ISequencer> ExplicitSequencer;
+    bool bExplicitBinding = false;
+    bool bEmbeddedLayout = false;
     FTSTicker::FDelegateHandle BindingTickerHandle;
 
     FDisplayRateProvider DisplayRateProvider;
     FOnWeaverSequencerFrameChanged OnSequencerFrameChanged;
     FSimpleDelegate OnContextChanged;
     TWeakObjectPtr<UMovieSceneSequence> FocusedSequence;
+    FMovieSceneSequenceID FocusedTemplate;
     bool bNotifyingTime = false;
     bool bRegistered = false;
 

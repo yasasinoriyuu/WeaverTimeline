@@ -99,6 +99,49 @@ struct FPreparationAdapter : FWeaverTimelineReferenceAdapter
 };
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWeaverTrackScrubPolicyTest, "WeaverTimeline.Boundaries.TrackAreaScrubPolicy", BoundaryFlags)
+bool FWeaverTrackScrubPolicyTest::RunTest(const FString&)
+{
+    for (bool Allow : { true, false })
+    {
+        auto Adapter = MakeShared<FWeaverTimelineReferenceAdapter>();
+        int32 FramesNotified = 0, ContextMenus = 0;
+        auto OnFrame = FOnWeaverFrameChanged::CreateLambda([&](double) { ++FramesNotified; });
+        auto OnContext = FOnWeaverLaneContextRequested::CreateLambda([&](FGuid, double, FVector2D) { ++ContextMenus; });
+        // The true branch deliberately omits the new option, testing its default compatibility.
+        TSharedRef<SWeaverEditableTimeline> Widget = Allow
+            ? SNew(SWeaverEditableTimeline).Adapter(Adapter).OnFrameChanged(OnFrame).OnLaneContextRequested(OnContext)
+            : SNew(SWeaverEditableTimeline).Adapter(Adapter).AllowTrackAreaScrub(false).OnFrameChanged(OnFrame).OnLaneContextRequested(OnContext);
+        FWeaverPointerWindow Input(Widget);
+        Widget->SetCurrentFrame(32);
+        FWeaverSelection Selection; Selection.Type = EWeaverItemType::Block;
+        Selection.LaneId = Adapter->GetDocument().LaneId; Selection.ItemId = Adapter->GetDocument().Items[0].Id;
+        Widget->GetTimeline()->SetSelection(Selection);
+        Input.Down(180); Input.Up(180);
+        TestEqual(TEXT("Blank click obeys policy"), Widget->GetCurrentFrame(), Allow ? 180. : 32.);
+        TestTrue(TEXT("Blank click still clears selection"), Widget->GetTimeline()->GetSelection().Type == EWeaverItemType::None);
+        Widget->SetCurrentFrame(32);
+        const auto Reply = Input.Down(180);
+        TestEqual(TEXT("Only enabled scrub captures input"), Reply.GetMouseCaptor().IsValid(), Allow);
+        Input.Move(180, 200, EKeys::LeftMouseButton); Input.Up(200);
+        TestEqual(TEXT("Repeated blank drag obeys policy"), Widget->GetCurrentFrame(), Allow ? 200. : 32.);
+        if (!Allow) { TestEqual(TEXT("Disabled blank input never emits a transient frame change"), FramesNotified, 0); }
+        TestEqual(TEXT("Blank interaction never commits business data"), Adapter->CommitCount, 0);
+        Input.Down(180, EKeys::RightMouseButton); Input.Up(180, EKeys::RightMouseButton);
+        TestEqual(TEXT("Blank context menu remains available"), ContextMenus, 1);
+        const auto Ruler = Input.At(160, 12);
+        auto& App = FSlateApplication::Get();
+        const auto RulerReply = App.RoutePointerDownEvent(Input.Path, Input.Pointer(Ruler, Ruler, EKeys::LeftMouseButton, true));
+        App.RoutePointerUpEvent(Input.Path, Input.Pointer(Ruler, Ruler, EKeys::LeftMouseButton, false));
+        // HitTest has always returned no hit above RulerHeight: the local ruler is display-only.
+        // This option must not add a new ruler gesture; embedded users keep the native outer ruler.
+        TestFalse(TEXT("Display-only local ruler remains unhandled"), RulerReply.IsEventHandled());
+        TestEqual(TEXT("Display-only local ruler preserves the previous frame"), Widget->GetCurrentFrame(), Allow ? 200. : 32.);
+        TestFalse(TEXT("Completed interaction leaves no capture"), Widget->GetTimeline()->HasMouseCapture());
+    }
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FWeaverPrepareCancelTest, "WeaverTimeline.Boundaries.CancelBeforeCommit", BoundaryFlags)
 bool FWeaverPrepareCancelTest::RunTest(const FString&)
 {

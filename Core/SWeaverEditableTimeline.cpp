@@ -7,10 +7,14 @@ void SWeaverEditableTimeline::Construct(const FArguments& InArgs)
     OnFrameChanged = InArgs._OnFrameChanged;
     OnBlockEndpointClicked = InArgs._OnBlockEndpointClicked;
     bJumpToEndpointOnClick = InArgs._JumpToEndpointOnClick;
+    bRequiresOwner = InArgs._EmbeddedInSequencer || InArgs._SequencerSource.IsValid();
     ChildSlot
     [
         SAssignNew(Timeline, SWeaverTimeline)
+        .RulerHeight(InArgs._EmbeddedInSequencer ? 0.f : 24.f)
+        .LabelWidth(InArgs._EmbeddedInSequencer ? 0.f : 148.f)
         .DeferDeleteSelectionToSource(true)
+        .AllowTrackAreaScrub(InArgs._AllowTrackAreaScrub)
         .CurrentFrame_Lambda([this]() { return CurrentFrame; })
         .OnFrameChanged_Lambda([this](double Frame) { FrameChanged(Frame); Bridge.PushTimelineFrame(Frame); })
         .OnViewRangeChanged_Lambda([this](double Start, double End) { Bridge.PushTimelineViewRange(Start, End); })
@@ -71,19 +75,36 @@ void SWeaverEditableTimeline::Construct(const FArguments& InArgs)
         })
     ];
     Controller->AttachTimeline(Timeline.ToSharedRef());
-    if (InArgs._SyncSequencer)
+    if (InArgs._EmbeddedInSequencer) { Timeline->SetHorizontalPadding(0, 0); }
+    if (InArgs._SyncSequencer || InArgs._EmbeddedInSequencer || InArgs._SequencerSource.IsValid())
     {
-        Bridge.Register(Timeline.ToSharedRef(), InArgs._DisplayRateProvider,
-            FOnWeaverSequencerFrameChanged::CreateSP(this, &SWeaverEditableTimeline::FrameChanged),
-            FSimpleDelegate::CreateLambda([Weak = TWeakPtr<FWeaverTimelineEditController>(Controller)]()
+        auto FrameCallback = FOnWeaverSequencerFrameChanged::CreateSP(this, &SWeaverEditableTimeline::FrameChanged);
+        auto ContextCallback = FSimpleDelegate::CreateLambda([Weak = TWeakPtr<FWeaverTimelineEditController>(Controller),
+            WeakWidget = TWeakPtr<SWeaverEditableTimeline>(SharedThis(this))]()
             {
                 if (auto Pinned = Weak.Pin()) { Pinned->CancelEdit(EWeaverEditEndReason::SourceChanged); }
-            }));
+                if (auto Widget = WeakWidget.Pin(); Widget && Widget->bRequiresOwner)
+                { Widget->SetEnabled(Widget->Bridge.IsBound()); }
+            });
+        if (InArgs._EmbeddedInSequencer || InArgs._SequencerSource.IsValid())
+        {
+            Bridge.RegisterForSequencer(Timeline.ToSharedRef(), InArgs._SequencerSource, InArgs._DisplayRateProvider,
+                FrameCallback, ContextCallback, InArgs._EmbeddedInSequencer);
+        }
+        else { Bridge.Register(Timeline.ToSharedRef(), InArgs._DisplayRateProvider, FrameCallback, ContextCallback); }
     }
 }
 
 SWeaverEditableTimeline::~SWeaverEditableTimeline()
 {
+    Shutdown();
+}
+
+void SWeaverEditableTimeline::Shutdown()
+{
+    if (bShutdown) { return; }
+    bShutdown = true;
+    SetEnabled(false);
     Bridge.Unregister();
     if (Controller) { Controller->DetachTimeline(); }
     if (Timeline) { Timeline->UnbindCallbacks(); }
@@ -91,8 +112,10 @@ SWeaverEditableTimeline::~SWeaverEditableTimeline()
 
 void SWeaverEditableTimeline::Tick(const FGeometry& Geometry, double Time, float DeltaTime)
 {
-    Controller->Tick();
+    if (bShutdown) { return; }
     Bridge.Sync(Timeline->GetCachedGeometry());
+    if (bRequiresOwner) { SetEnabled(Bridge.IsBound()); }
+    Controller->Tick();
     SCompoundWidget::Tick(Geometry, Time, DeltaTime);
 }
 

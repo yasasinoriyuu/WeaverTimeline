@@ -18,6 +18,12 @@ private:
 
 FWeaverTimelineReferenceAdapter::FWeaverTimelineReferenceAdapter() { ReplaceDocument(); }
 
+FWeaverTimelineReferenceAdapter::FWeaverTimelineReferenceAdapter(UWeaverReferenceDocument& InDocument)
+    : Document(&InDocument)
+{
+    DocumentChangedHandle = Document->OnChanged.AddRaw(this, &FWeaverTimelineReferenceAdapter::NotifySourceChanged);
+}
+
 FWeaverTimelineReferenceAdapter::~FWeaverTimelineReferenceAdapter()
 {
     if (Document.IsValid()) { Document->OnChanged.Remove(DocumentChangedHandle); }

@@ -47,6 +47,7 @@ void SWeaverTimeline::Construct(const FArguments& InArgs)
     LaneHeight = InArgs._LaneHeight;
     LabelWidth = InArgs._LabelWidth;
     bDeferDeleteSelectionToSource = InArgs._DeferDeleteSelectionToSource;
+    bAllowTrackAreaScrub = InArgs._AllowTrackAreaScrub;
     LeftPadding = LabelWidth;
 
     OnFrameChanged = InArgs._OnFrameChanged;
@@ -220,9 +221,17 @@ void SWeaverTimeline::CancelInteraction()
     ++CancellationSerial;
     FinishPrimaryInteraction(true);
     ResetRightMouseState();
-    if (FSlateApplication::IsInitialized() && HasMouseCapture())
+    if (FSlateApplication::IsInitialized() && CapturedPointerIndex.IsSet())
     {
-        FSlateApplication::Get().GetCursorUser()->ReleaseCursorCapture();
+        // Release the pointer that actually started this gesture, not a global mouse
+        // pointer (Slate routed/virtual pointer indices need not be CursorPointerIndex).
+        const uint32 Pointer = CapturedPointerIndex.GetValue();
+        const int32 UserIndex = CapturedUserIndex;
+        CapturedPointerIndex.Reset();
+        CapturedUserIndex = INDEX_NONE;
+        if (auto User = FSlateApplication::Get().GetUser(UserIndex);
+            User && User->DoesWidgetHaveCapture(SharedThis(this), Pointer))
+        { User->ReleaseCapture(Pointer); }
     }
 }
 
@@ -321,6 +330,7 @@ void SWeaverTimeline::DrawRuler(
     const int32 LayerId,
     const FGeometry& Geometry) const
 {
+    if (RulerHeight <= 0.f) { return; }
     const FSlateBrush* WhiteBrush = FAppStyle::GetBrush("WhiteBrush");
     const float Left = TrackLeft();
     const float Right = TrackRight(Geometry);
@@ -361,7 +371,7 @@ void SWeaverTimeline::DrawLaneHeaderActions(
     const FGeometry& Geometry,
     const int32 LaneIndex) const
 {
-    if (!Lanes.IsValidIndex(LaneIndex))
+    if (LabelWidth <= 0.f || !Lanes.IsValidIndex(LaneIndex))
     {
         return;
     }
@@ -435,7 +445,7 @@ void SWeaverTimeline::DrawTimingRows(
         }
 
         const float Top = TimingRowTop(LaneIndex, RowIndex) + 2.0f;
-        FSlateDrawElement::MakeText(
+        if (LabelWidth > 0.f) FSlateDrawElement::MakeText(
             OutDrawElements,
             LayerId,
             Geometry.ToPaintGeometry(
@@ -578,7 +588,7 @@ int32 SWeaverTimeline::OnPaint(
             ESlateDrawEffect::None,
             Lane.bEnabled ? Lane.AccentColor : Lane.AccentColor.CopyWithNewOpacity(0.25f));
 
-        FSlateDrawElement::MakeText(
+        if (LabelWidth > 0.f) FSlateDrawElement::MakeText(
             OutDrawElements,
             LayerId + 4,
             AllottedGeometry.ToPaintGeometry(
@@ -1107,6 +1117,11 @@ FReply SWeaverTimeline::OnMouseButtonDown(
     const FGeometry& MyGeometry,
     const FPointerEvent& MouseEvent)
 {
+    if (CapturedPointerIndex.IsSet() && (CapturedUserIndex != MouseEvent.GetUserIndex()
+        || CapturedPointerIndex.GetValue() != MouseEvent.GetPointerIndex()))
+    { CancelInteraction(); }
+    CapturedUserIndex = MouseEvent.GetUserIndex();
+    CapturedPointerIndex = MouseEvent.GetPointerIndex();
     const FVector2D Local = MyGeometry.AbsoluteToLocal(MouseEvent.GetScreenSpacePosition());
     const FHitResult Hit = HitTest(MyGeometry, Local);
     const uint64 PressCancellationSerial = CancellationSerial;
@@ -1200,6 +1215,10 @@ FReply SWeaverTimeline::OnMouseButtonDown(
             FWeaverSelection Empty;
             ApplySelection(Empty, true);
             if (CancellationSerial != PressCancellationSerial) { return FReply::Handled(); }
+            if (!bAllowTrackAreaScrub && Local.Y >= RulerHeight)
+            {
+                return FReply::Handled().SetUserFocus(SharedThis(this), EFocusCause::Mouse);
+            }
             DragMode = EDragMode::Scrub;
             DragStartLocal = Local;
             OnFrameChanged.ExecuteIfBound(LocalXToFrame(MyGeometry, Local.X, true));

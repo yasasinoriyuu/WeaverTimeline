@@ -18,6 +18,10 @@
 
 ## 自动化测试
 
+V7 原生内嵌入口：打开 Level Sequence 后，在原生 Sequencer 的“添加轨道”菜单选择“Weaver 编排参考”。也可在控制台执行 `Weaver.ReferenceEmbedded`，打开一个只含测试文档的临时原生 Sequencer。该窗口用来查看真正的顶层 Track 与右侧内嵌内容，不修改当前资产。
+
+新增 `WeaverTimeline.Embedded.NativeRootInput` 和 `ExplicitOwnerIsolation`：直接构造原生 Sequencer/根 Track，检查实际 Widget 祖先路径、路由拖动、权威数据和显示、Undo/Redo、关闭时取消，以及多编辑器身份隔离。它们是合成 Slate 输入，不是人工鼠标验收。V7 详细记录见 `Docs/SEQUENCER_EMBEDDING_V7.md`。
+
 在 Session Frontend 的 Automation 中筛选 WeaverTimeline，或通过独立编辑器运行：
 
 ```text

@@ -10,6 +10,7 @@ class FWeaverTimelineReferenceAdapter : public IWeaverTimelineEditAdapter
 {
 public:
     FWeaverTimelineReferenceAdapter();
+    explicit FWeaverTimelineReferenceAdapter(UWeaverReferenceDocument& InDocument);
     virtual ~FWeaverTimelineReferenceAdapter();
     virtual FWeaverSourceContext GetContext() const override;
     virtual void BuildPresentation(FWeaverTimelinePresentation& Out) const override;

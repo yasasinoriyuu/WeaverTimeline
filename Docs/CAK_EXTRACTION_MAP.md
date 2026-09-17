@@ -24,6 +24,20 @@ Source/CharacterActionKitPlannerEditor/Private/SCharacterActionPlannerPanel.h/.c
 
 ## Extracted into WeaverTimeline
 
+### Native Sequencer section host (V7 correction)
+
+V6 extraction omitted a distinct, working CAK path. A viewport overlay is not the native top-level planner. Current source was checked on local branch `refactor/canonical-semantic-runtime`, HEAD `11749c4c7b8c5e184bf1c94beec47c11c6ba9ea4`; unrelated local lane-layout changes were preserved and not copied.
+
+| CAK source | Extracted or consumer-owned responsibility |
+| --- | --- |
+| `CharacterActionPlannerTrackEditor.cpp` | Root track registration and menu example in Reference; real persisted track types remain consumer-owned |
+| `CharacterActionPlannerTrackSection.cpp` | Public `CreateViewWidgets` overlay mount, input-enabled locked anchor, empty duplicate title, content-driven height in `FWeaverSequencerSection` |
+| `MovieSceneCharacterActionPlannerTrack.cpp::EnsureLayoutSection` | Consumer contract: one all-time locked layout anchor; it does not replace business sections |
+| `SCharacterActionPlannerPanel.cpp`, `SectionTrack` mode | Inline coordinates without viewport label padding; height change notification; owning Sequencer must be explicit |
+| `CharacterActionPlannerViewportOverlay.cpp` | Separate viewport host retained, not used as evidence of native embedding |
+
+V7 does not copy CAK's automatic `AddPlannerTrack` on every Tick, global preferred-window guess, character bindings, animation evaluation or conflict rules. See `SEQUENCER_EMBEDDING_V7.md` for the complete contract and measured limits. Older CAK design paragraphs saying that the anchor has no runtime evaluation conflict with newer CAK runtime source; only its UI ownership pattern is extracted.
+
 ### Editing lifecycle (V5)
 
 The V4 controller introduced mandatory authority refresh. V5 retains that direction and completes the session contract; it replaces the V4 rule that an Accepted result must equal the pointer proposal.

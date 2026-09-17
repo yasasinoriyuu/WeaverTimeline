@@ -1,4 +1,8 @@
-# WeaverTimeline V6 集成契约
+# WeaverTimeline V7 开发版集成契约
+
+V6 的编辑 Session 与 Adapter 接口保持兼容。V7 新增原生 Sequencer Section 承载，完整说明及边界见 [SEQUENCER_EMBEDDING_V7.md](SEQUENCER_EMBEDDING_V7.md)。
+
+顶层内嵌使用 `FWeaverSequencerSection`、`EmbeddedInSequencer(true)` 与明确的 `SequencerSource`；消费者负责顶层 Track/锁定全时段布局 Section 及左侧 Outliner 内容。严禁把 Viewport Overlay 当成 Sequencer 顶层嵌入。关闭所属 Sequencer 后取消输入并解绑，不自动改连其他窗口。宿主永久销毁时调用 `Shutdown`，临时隐藏时仍使用 `Deactivate`。
 
 ## 默认入口与模块边界
 
@@ -19,6 +23,8 @@ Core 没有反射类型或模块导出宏。参考插件的 transactional UObjec
 构造 SWeaverEditableTimeline，传入 Adapter；可选 SyncSequencer(true)、DisplayRateProvider、OnFrameChanged。Overlay 使用 RegisterEditable(Timeline, Label)，自动绑定隐藏/折叠/卸载取消。
 
 OnBlockEndpointClicked(LaneId, BlockId, bStart) 将端点身份交给消费者。默认 JumpToEndpointOnClick(true) 同时跳转播放头；设为 false 可仅接收端点事件，由消费者实现属性编辑等业务行为。普通 Scrub 不发送端点事件。
+
+`AllowTrackAreaScrub` 在 `SWeaverEditableTimeline` 和 `SWeaverTimeline` 上默认 `true`，保留既有空白轨道 scrub。消费者设为 `false` 后，空白左键点击仍清除选择，但不发送时间变化、不捕获鼠标开始 scrub；重复空白拖动也不跳时间。独立控件的本地时间尺保持原有仅显示行为，原生内嵌继续使用外部 Sequencer 时间尺。该设置不影响右键菜单、块身选择/拖动及端点点击/Resize 阈值。
 
 实现三个必需方法：GetContext、BuildPresentation、Commit(Session)。消费者不再连接 Finished 后的 SetBlocks/SetKeys。
 

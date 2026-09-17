@@ -19,6 +19,8 @@ WeaverTimeline 不是共享运行时插件。每个业务插件携带自己的 C
 
 当使用 CAK 风格的 Viewport 承载方式时，编排器位于活动 Level Editor Viewport 底部，可以展开、折叠和拖动改变高度。
 
+V7 另提供 CAK 的原生 Sequencer 轨道内嵌承载：在消费者建立的顶层轨道右侧放置自绘编排。两种承载不是同一个入口，也不能以视口面板替代产品明确要求的 Sequencer 顶层位置。内嵌模式使用所属 Sequencer 的原生时间尺，不重复占用左侧时间宽度。
+
 ## 统一交互要求
 
 所有消费者应尽可能保持同一种操作手感：
@@ -36,7 +38,7 @@ WeaverTimeline 不是共享运行时插件。每个业务插件携带自己的 C
 
 ## 与 Sequencer 的关系
 
-WeaverTimeline 是自绘编辑视图，不是 Sequencer 原生 Track/Channel UI。
+WeaverTimeline 是自绘编辑视图，不实现业务动画 Channel；它可以嵌入消费者的 Sequencer 原生 Track/Section UI。
 
 当消费者启用 Sequencer Bridge 时：
 

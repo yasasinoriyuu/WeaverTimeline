@@ -32,12 +32,15 @@ public:
         , _LaneHeight(36.0f)
         , _LabelWidth(148.0f)
         , _DeferDeleteSelectionToSource(false)
+        , _AllowTrackAreaScrub(true)
     {}
         SLATE_ATTRIBUTE(double, CurrentFrame)
         SLATE_ARGUMENT(float, RulerHeight)
         SLATE_ARGUMENT(float, LaneHeight)
         SLATE_ARGUMENT(float, LabelWidth)
         SLATE_ARGUMENT(bool, DeferDeleteSelectionToSource)
+        /** Empty lane clicks may clear selection without seeking; other input paths are unchanged. */
+        SLATE_ARGUMENT(bool, AllowTrackAreaScrub)
         SLATE_EVENT(FOnWeaverFrameChanged, OnFrameChanged)
         SLATE_EVENT(FOnWeaverSelectionChanged, OnSelectionChanged)
         SLATE_EVENT(FOnWeaverKeyEditStarted, OnKeyEditStarted)
@@ -210,6 +213,7 @@ private:
     double ViewEndFrame = 240.0;
     bool bExternalViewRange = false;
     bool bDeferDeleteSelectionToSource = false;
+    bool bAllowTrackAreaScrub = true;
     float RulerHeight = 24.0f;
     float LaneHeight = 36.0f;
     float LabelWidth = 148.0f;
@@ -218,6 +222,8 @@ private:
 
     EDragMode DragMode = EDragMode::None;
     uint64 CancellationSerial = 0;
+    int32 CapturedUserIndex = INDEX_NONE;
+    TOptional<uint32> CapturedPointerIndex;
     FVector2D DragStartLocal = FVector2D::ZeroVector;
     FGuid DragLaneId;
     FGuid DragItemId;

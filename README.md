@@ -14,11 +14,15 @@ WeaverTimeline (source master)
 
 ## Source Version
 
-当前源码母版版本：`6`。本版修复 V5 的联动开关、提交前取消、端点通知和鼠标取消边界；验证记录见 [VALIDATION_V6.md](Docs/VALIDATION_V6.md)。
+当前工作区版本：`7-dev`。在 V6 上补齐 CAK 的原生 Sequencer 顶层轨道嵌入路径、明确所属编辑器和宿主生命周期。追溯及验证见 [V7 嵌入说明](Docs/SEQUENCER_EMBEDDING_V7.md)。
 
-**状态：V6 已冻结（2026-09-18，用户验收确认）。** 冻结源码基线为 `977774f0e208e8c18399e283f2adad4927fb22c3`，归档标签为 `v6-frozen`。冻结约定及验收范围见 [FREEZE_V6.md](Docs/FREEZE_V6.md)。
+**V6 历史版本仍保持冻结（2026-09-18，用户验收确认）。** 冻结源码基线为 `977774f0e208e8c18399e283f2adad4927fb22c3`，归档标签为 `v6-frozen`。本轮按用户明确要求继续完善母版，不移动标签；V7 尚未获得用户验收。冻结约定及验收范围见 [FREEZE_V6.md](Docs/FREEZE_V6.md)。
 
 ## Core 组成
+
+### Sequencer 内嵌入口（V7）
+
+`FWeaverSequencerSection` 通过 UE 公共 `CreateViewWidgets` 把 `SWeaverEditableTimeline` 挂入真正的原生 Section 视图。消费者创建顶层 Track 和全时段锁定布局 Section，传入该 TrackEditor 的 Sequencer；母版负责可交互控件、时间联动、行高变化通知及销毁清理。Viewport Overlay 是另一种可选承载，不等于顶层嵌入。
 
 ### 默认编辑入口
 

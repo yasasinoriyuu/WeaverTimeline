@@ -834,14 +834,13 @@ SWeaverTimeline::FHitResult SWeaverTimeline::HitTest(
 
             if (Block.bResizable)
             {
-                if (FMath::Abs(Local.X - X0) <= BlockResizeHandleWidth)
+                const float StartDistance = FMath::Abs(Local.X - X0);
+                const float EndDistance = FMath::Abs(Local.X - X1);
+                if (StartDistance <= BlockResizeHandleWidth || EndDistance <= BlockResizeHandleWidth)
                 {
-                    Result.BlockEditKind = EWeaverBlockEditKind::ResizeStart;
-                    Result.bBlockEndpoint = true;
-                }
-                else if (FMath::Abs(Local.X - X1) <= BlockResizeHandleWidth)
-                {
-                    Result.BlockEditKind = EWeaverBlockEditKind::ResizeEnd;
+                    Result.BlockEditKind = StartDistance <= EndDistance
+                        ? EWeaverBlockEditKind::ResizeStart
+                        : EWeaverBlockEditKind::ResizeEnd;
                     Result.bBlockEndpoint = true;
                 }
             }

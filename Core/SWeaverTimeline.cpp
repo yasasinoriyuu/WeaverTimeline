@@ -217,6 +217,7 @@ void SWeaverTimeline::SetPresentation(TArray<FWeaverLane> InLanes, TArray<FWeave
 
 void SWeaverTimeline::CancelInteraction()
 {
+    ++CancellationSerial;
     FinishPrimaryInteraction(true);
     ResetRightMouseState();
     if (FSlateApplication::IsInitialized() && HasMouseCapture())
@@ -1108,6 +1109,7 @@ FReply SWeaverTimeline::OnMouseButtonDown(
 {
     const FVector2D Local = MyGeometry.AbsoluteToLocal(MouseEvent.GetScreenSpacePosition());
     const FHitResult Hit = HitTest(MyGeometry, Local);
+    const uint64 PressCancellationSerial = CancellationSerial;
 
     if (MouseEvent.GetEffectingButton() == EKeys::LeftMouseButton)
     {
@@ -1135,6 +1137,7 @@ FReply SWeaverTimeline::OnMouseButtonDown(
         if (Hit.KeyId.IsValid())
         {
             ApplySelection(Hit.ToSelection(), true);
+            if (CancellationSerial != PressCancellationSerial) { return FReply::Handled(); }
             if (const FWeaverKey* Key = FindKey(Hit.KeyId))
             {
                 BeginKeyDrag(*Key, Local);
@@ -1148,6 +1151,7 @@ FReply SWeaverTimeline::OnMouseButtonDown(
         if (Hit.BlockId.IsValid())
         {
             ApplySelection(Hit.ToSelection(), true);
+            if (CancellationSerial != PressCancellationSerial) { return FReply::Handled(); }
             if (const FWeaverBlock* Block = FindBlock(Hit.BlockId))
             {
                 if (Hit.bExpansionToggle)
@@ -1195,9 +1199,11 @@ FReply SWeaverTimeline::OnMouseButtonDown(
         {
             FWeaverSelection Empty;
             ApplySelection(Empty, true);
+            if (CancellationSerial != PressCancellationSerial) { return FReply::Handled(); }
             DragMode = EDragMode::Scrub;
             DragStartLocal = Local;
             OnFrameChanged.ExecuteIfBound(LocalXToFrame(MyGeometry, Local.X, true));
+            if (DragMode != EDragMode::Scrub || CancellationSerial != PressCancellationSerial) { return FReply::Handled(); }
             return FReply::Handled()
                 .CaptureMouse(SharedThis(this))
                 .SetUserFocus(SharedThis(this), EFocusCause::Mouse);
@@ -1209,6 +1215,7 @@ FReply SWeaverTimeline::OnMouseButtonDown(
         if (Hit.KeyId.IsValid() || Hit.BlockId.IsValid())
         {
             ApplySelection(Hit.ToSelection(), true);
+            if (CancellationSerial != PressCancellationSerial) { return FReply::Handled(); }
         }
 
         bRightButtonDown = true;

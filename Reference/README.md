@@ -39,12 +39,16 @@ UnrealEditor.exe <WeaverReference.uproject>
 | Lifecycle.CommandsSelectionReentrancy | Create/Delete、选择和展开保留、删除清选择、Finished 回调重入 |
 | Lifecycle.CallbackBoundaries | NoChange/Reject 不占额外 Undo 步骤、Delete 键拒绝/接受、Begin 回调换源、取消不遗留 Capture、宿主销毁、留存子 Widget 的解绑 |
 | Slate.PointerCommitCancel | Slate 合成 PointerDown/Move/Up 与 Capture；Move、ResizeStart/End、Key、TimingRow 提交后权威回读、Esc、CaptureLost |
+| Boundaries.CancelBeforeCommit | 创建事务时取消、隐藏、解绑或来源变化均不提交；事务和 Preview 仅清理一次，保留原因 |
+| Boundaries.ScrubCancellation | Scrub 回调隐藏/换源、选择回调取消后不再捕获鼠标 |
+| Boundaries.EndpointNotification | 左右端点的 Lane/Block/方向身份、可选播放头跳转、普通 Scrub 不误发事件 |
+| Boundaries.SequencerOptIn | 真实 UE Sequencer 对象：默认禁用不受 Tick/Scrub/Pan/Zoom 影响；启用、解绑、重新启用 |
 
 这些测试使用实际 UE UObject、FScopedTransaction、Slate Widget 与事件路由，断言权威状态和重新发布的 Widget 数据。NullRHI 测试不验证屏幕像素、物理鼠标或业务插件的实时角色/相机效果。
 
 ## 验证记录
 
-当前构建/测试记录见 [VALIDATION_V5.md](../Docs/VALIDATION_V5.md)。验收不能只看进程返回码：须检查找到的测试数量、每项结果、报告失败数与进程退出。
+当前构建/测试记录见 [VALIDATION_V6.md](../Docs/VALIDATION_V6.md)，历史记录见 [VALIDATION_V5.md](../Docs/VALIDATION_V5.md)。当前共 10 项测试。验收不能只看进程返回码：须检查找到的测试数量、每项结果、报告失败数与进程退出。
 
 ## 尚需人工或消费者验收
 

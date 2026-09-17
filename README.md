@@ -14,7 +14,7 @@ WeaverTimeline (source master)
 
 ## Source Version
 
-当前源码母版版本：`5`。
+当前源码母版版本：`6`。本版修复 V5 的联动开关、提交前取消、端点通知和鼠标取消边界；验证记录见 [VALIDATION_V6.md](Docs/VALIDATION_V6.md)。
 
 ## Core 组成
 

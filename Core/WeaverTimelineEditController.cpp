@@ -224,17 +224,27 @@ void FWeaverTimelineEditController::Complete(bool bCommit, EWeaverEditEndReason 
         TGuardValue<bool> Guard(bDispatching, true);
         if (auto Widget = Timeline.Pin()) { Widget->CancelInteraction(); }
         LastResult = { EWeaverEditOutcome::Cancelled, FText::GetEmpty() };
-        if (bCommit && !bSourceInvalidated && bAttached && Adapter->GetContext() == Session.Context)
+        const auto CanCommit = [&]()
+        {
+            if (PendingCancelReason.IsSet()) { Reason = *PendingCancelReason; return false; }
+            if (!bAttached) { Reason = EWeaverEditEndReason::Detached; return false; }
+            if (bSourceInvalidated || Adapter->GetContext() != Session.Context)
+            {
+                Reason = EWeaverEditEndReason::SourceChanged;
+                return false;
+            }
+            return true;
+        };
+        if (bCommit && CanCommit())
         {
             auto Transaction = Adapter->BeginTransaction(Session);
-            if (!bSourceInvalidated && bAttached && Adapter->GetContext() == Session.Context)
+            // Transaction setup is consumer code: cancellation here must prevent the first write.
+            if (CanCommit())
             {
                 LastResult = Adapter->Commit(Session);
             }
-            else { Reason = EWeaverEditEndReason::SourceChanged; }
             if (Transaction) { Transaction->Finish(LastResult.Outcome); }
         }
-        else if (bCommit) { Reason = EWeaverEditEndReason::SourceChanged; }
         Adapter->EndPreview(Session, LastResult, Reason);
     }
     PendingCancelReason.Reset(); // Session is already terminal; no second EndPreview.

@@ -54,6 +54,7 @@ void FWeaverSequencerBridge::Register(
     DisplayRateProvider = MoveTemp(InDisplayRateProvider);
     OnSequencerFrameChanged = MoveTemp(InOnSequencerFrameChanged);
     OnContextChanged = MoveTemp(InOnContextChanged);
+    bRegistered = true;
 
     BindingTickerHandle = FTSTicker::GetCoreTicker().AddTicker(
         FTickerDelegate::CreateRaw(this, &FWeaverSequencerBridge::TickBinding),
@@ -64,6 +65,7 @@ void FWeaverSequencerBridge::Register(
 
 void FWeaverSequencerBridge::Unregister()
 {
+    bRegistered = false; // Disable discovery/writes before teardown can call consumer code.
     if (BindingTickerHandle.IsValid())
     {
         FTSTicker::GetCoreTicker().RemoveTicker(BindingTickerHandle);
@@ -85,6 +87,7 @@ bool FWeaverSequencerBridge::TickBinding(float DeltaTime)
 
 void FWeaverSequencerBridge::RefreshBinding()
 {
+    if (!bRegistered) { return; }
     TSharedPtr<ISequencer> Candidate;
     for (const TWeakPtr<ISequencer>& WeakSequencer :
         FLevelEditorSequencerIntegration::Get().GetSequencers())
@@ -107,12 +110,14 @@ void FWeaverSequencerBridge::RefreshBinding()
     }
 
     DetachSequencer();
+    if (!bRegistered) { return; }
     Sequencer = Candidate;
 
     if (Candidate.IsValid())
     {
         FocusedSequence = Candidate->GetFocusedMovieSceneSequence();
         OnContextChanged.ExecuteIfBound();
+        if (!bRegistered || Sequencer.Pin() != Candidate) { return; }
         SequencerTrackAreaWidget = FindWeaverTrackAreaWidgetRecursive(
             Candidate->GetSequencerWidget());
         SequencerTimeChangedHandle = Candidate->OnGlobalTimeChanged().AddRaw(
@@ -168,6 +173,7 @@ FFrameRate FWeaverSequencerBridge::ResolveDisplayRate(
 
 void FWeaverSequencerBridge::PushTimelineFrame(const double NewFrame)
 {
+    if (!bRegistered) { return; }
     const TSharedPtr<ISequencer> ActiveSequencer = Sequencer.Pin();
     if (bNotifyingTime || !ActiveSequencer.IsValid() || !FMath::IsFinite(NewFrame))
     {
@@ -187,6 +193,7 @@ void FWeaverSequencerBridge::PushTimelineViewRange(
     const double StartFrame,
     const double EndFrame)
 {
+    if (!bRegistered) { return; }
     const TSharedPtr<ISequencer> ActiveSequencer = Sequencer.Pin();
     if (!ActiveSequencer.IsValid()
         || !FMath::IsFinite(StartFrame)
@@ -206,6 +213,7 @@ void FWeaverSequencerBridge::PushTimelineViewRange(
 
 void FWeaverSequencerBridge::Sync(const FGeometry& TimelineGeometry)
 {
+    if (!bRegistered) { return; }
     RefreshBinding(); // Detect sequence/window changes before each editable-frame tick.
     const TSharedPtr<ISequencer> ActiveSequencer = Sequencer.Pin();
     const TSharedPtr<SWeaverTimeline> TimelineWidget = Timeline.Pin();
@@ -276,7 +284,7 @@ void FWeaverSequencerBridge::Sync(const FGeometry& TimelineGeometry)
 
 void FWeaverSequencerBridge::HandleSequencerTimeChanged()
 {
-    if (bNotifyingTime) { return; }
+    if (!bRegistered || bNotifyingTime) { return; }
     TGuardValue<bool> Guard(bNotifyingTime, true);
     const TSharedPtr<ISequencer> ActiveSequencer = Sequencer.Pin();
     if (!ActiveSequencer.IsValid())

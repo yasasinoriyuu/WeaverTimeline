@@ -5,6 +5,8 @@ void SWeaverEditableTimeline::Construct(const FArguments& InArgs)
     check(InArgs._Adapter.IsValid());
     Controller = MakeShared<FWeaverTimelineEditController>(InArgs._Adapter.ToSharedRef());
     OnFrameChanged = InArgs._OnFrameChanged;
+    OnBlockEndpointClicked = InArgs._OnBlockEndpointClicked;
+    bJumpToEndpointOnClick = InArgs._JumpToEndpointOnClick;
     ChildSlot
     [
         SAssignNew(Timeline, SWeaverTimeline)
@@ -49,18 +51,23 @@ void SWeaverEditableTimeline::Construct(const FArguments& InArgs)
             Command.LaneId = Lane;
             Controller->ExecuteCommand(Command);
         })
-        .OnBlockEndpointClicked_Lambda([this](FGuid, FGuid Item, bool Start)
+        .OnBlockEndpointClicked_Lambda([this](FGuid Lane, FGuid Item, bool Start)
         {
+            TOptional<double> EndpointFrame;
             for (const auto& Block : Controller->GetPresentation().Blocks)
             {
                 if (Block.BlockId == Item)
                 {
-                    const double Frame = Start ? Block.StartFrame : Block.EndFrame;
-                    FrameChanged(Frame);
-                    Bridge.PushTimelineFrame(Frame);
+                    EndpointFrame = Start ? Block.StartFrame : Block.EndFrame;
                     break;
                 }
             }
+            if (bJumpToEndpointOnClick && EndpointFrame.IsSet())
+            {
+                FrameChanged(*EndpointFrame);
+                Bridge.PushTimelineFrame(*EndpointFrame);
+            }
+            OnBlockEndpointClicked.ExecuteIfBound(Lane, Item, Start);
         })
     ];
     Controller->AttachTimeline(Timeline.ToSharedRef());

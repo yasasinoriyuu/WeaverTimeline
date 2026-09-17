@@ -48,6 +48,7 @@ public:
     void PushTimelineViewRange(double StartFrame, double EndFrame);
 
     bool IsBound() const { return Sequencer.IsValid(); }
+    bool IsRegistered() const { return bRegistered; }
 
 private:
     bool TickBinding(float DeltaTime);
@@ -67,6 +68,7 @@ private:
     FSimpleDelegate OnContextChanged;
     TWeakObjectPtr<UMovieSceneSequence> FocusedSequence;
     bool bNotifyingTime = false;
+    bool bRegistered = false;
 
     bool bHasAppliedPadding = false;
     float LastAppliedLeftPadding = 0.0f;

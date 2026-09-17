@@ -217,6 +217,7 @@ private:
     float RightPadding = 12.0f;
 
     EDragMode DragMode = EDragMode::None;
+    uint64 CancellationSerial = 0;
     FVector2D DragStartLocal = FVector2D::ZeroVector;
     FGuid DragLaneId;
     FGuid DragItemId;

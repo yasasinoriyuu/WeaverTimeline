@@ -9,14 +9,16 @@
 class SWeaverEditableTimeline final : public SCompoundWidget
 {
 public:
-    SLATE_BEGIN_ARGS(SWeaverEditableTimeline) : _SyncSequencer(false) {}
+    SLATE_BEGIN_ARGS(SWeaverEditableTimeline) : _SyncSequencer(false), _JumpToEndpointOnClick(true) {}
         SLATE_ARGUMENT(TSharedPtr<IWeaverTimelineEditAdapter>, Adapter)
         SLATE_ARGUMENT(bool, SyncSequencer)
+        SLATE_ARGUMENT(bool, JumpToEndpointOnClick)
         SLATE_ARGUMENT(FWeaverSequencerBridge::FDisplayRateProvider, DisplayRateProvider)
         SLATE_EVENT(FOnWeaverFrameChanged, OnFrameChanged)
         SLATE_EVENT(FOnWeaverSelectionChanged, OnSelectionChanged)
         SLATE_EVENT(FOnWeaverContextRequested, OnContextRequested)
         SLATE_EVENT(FOnWeaverLaneContextRequested, OnLaneContextRequested)
+        SLATE_EVENT(FOnWeaverBlockEndpointClicked, OnBlockEndpointClicked)
     SLATE_END_ARGS()
     void Construct(const FArguments& InArgs);
     virtual ~SWeaverEditableTimeline();
@@ -33,6 +35,8 @@ private:
     TSharedPtr<FWeaverTimelineEditController> Controller;
     FWeaverSequencerBridge Bridge;
     FOnWeaverFrameChanged OnFrameChanged;
+    FOnWeaverBlockEndpointClicked OnBlockEndpointClicked;
+    bool bJumpToEndpointOnClick = true;
     double CurrentFrame = 0;
     bool bNotifyingFrame = false;
 };

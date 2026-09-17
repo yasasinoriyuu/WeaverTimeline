@@ -7,7 +7,7 @@ public class WeaverTimelineReference : ModuleRules
         PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
         PrivateDependencyModuleNames.AddRange(new[] {
             "Core", "CoreUObject", "Engine", "Slate", "SlateCore", "InputCore",
-            "UnrealEd", "LevelEditor", "MovieScene", "Sequencer", "SequencerWidgets"
+            "UnrealEd", "LevelEditor", "MovieScene", "Sequencer", "SequencerWidgets", "LevelSequence"
         });
         PrivateIncludePaths.Add(System.IO.Path.Combine(ModuleDirectory, "Private", "WeaverTimeline"));
     }

@@ -1,7 +1,7 @@
 {
     "FileVersion": 3,
-    "Version": 5,
-    "VersionName": "5",
+    "Version": 6,
+    "VersionName": "6",
     "FriendlyName": "WeaverTimeline 参考消费者",
     "Description": "Transactional reference consumer and lifecycle automation tests.",
     "Category": "Editor",

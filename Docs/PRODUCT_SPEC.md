@@ -57,6 +57,9 @@ Block
 Time
 Selection
 Edit gesture
+Edit session / Context / Revision
+Edit proposal / Commit outcome
+Authority reconciliation / Preview lifecycle
 ```
 
 Core 不解释这些对象“是什么”。例如：
@@ -91,5 +94,9 @@ WeaverTimeline 的通用抽取完成，至少意味着：
 - Sequencer 时间、ViewRange 和 TrackArea 几何同步可以由通用 Bridge 完成；
 - Core 中不存在业务专属全局注册或运行时数据所有权；
 - 任一消费者只通过 Adapter 映射自己的业务数据，不需要修改 Core；
+- 默认编辑路径在任何终止后清理 Preview 并回读完整权威数据，不能漏接 MouseUp 刷新；
+- Proposal 允许被业务吸附、限制、拒绝或引发多对象修改，最终 UI 以权威数据为准；
+- 外部修改、Undo/Redo 和上下文切换通过统一通知取消旧 Session、刷新 UI；
+- 独立 Reference Consumer 验证真实 UObject 事务和 Slate 输入到权威回读的闭环；
 - 源码副本可以通过同步脚本和 SHA-256 校验保持完全一致；
 - 最终必须在真实 UE 消费者插件中按本机 UE5 Skill / 工程规则完成编译验证。

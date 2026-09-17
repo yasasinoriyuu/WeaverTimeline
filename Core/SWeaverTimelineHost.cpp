@@ -18,6 +18,7 @@ constexpr float MaximumExpandedHeight = 520.0f;
 
 void SWeaverTimelineHost::Construct(const FArguments& InArgs)
 {
+    OnDeactivated = InArgs._OnDeactivated;
     ExpandedHeight = FMath::Clamp(
         InArgs._ExpandedHeight,
         MinimumExpandedHeight,
@@ -178,6 +179,7 @@ void SWeaverTimelineHost::OnMouseCaptureLost(
 FReply SWeaverTimelineHost::ToggleCollapsed()
 {
     bCollapsed = !bCollapsed;
+    if (bCollapsed) { OnDeactivated.ExecuteIfBound(); }
     Invalidate(EInvalidateWidgetReason::Layout);
     return FReply::Handled();
 }

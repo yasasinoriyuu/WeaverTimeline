@@ -2,7 +2,7 @@
 
 WeaverTimeline 是一份 **UE5 Slate 编排系统源码母版**，不是 CharacterActionKit、CineWeaver、AudioHead 共同依赖的第四个插件。
 
-它的目标是：多个业务插件各自携带一份相同的编排系统源码，从而保持 UI、交互和编辑生命周期一致，同时运行时完全独立。
+它的目标是：多个业务插件各自携带一份相同的编排系统源码，从而保持 UI 和交互一致，同时运行时完全独立。
 
 ```text
 WeaverTimeline (source master)
@@ -14,11 +14,15 @@ WeaverTimeline (source master)
 
 ## Source Version
 
-当前源码母版版本：`4`。
-
-Version 4 补齐了从 CAK 抽取时缺失的 **通用编辑闭环**：不再要求每个消费端自己重新拼 `Started -> Changed -> Finished -> 写回 -> SetBlocks/SetKeys`。
+当前源码母版版本：`5`。
 
 ## Core 组成
+
+### 默认编辑入口
+
+`SWeaverEditableTimeline` 与 `FWeaverTimelineEditController` 负责 Session、Commit/Cancel、外部 Preview 清理、全量权威回读和选择状态协调。业务 Adapter 提供数据、提交规则与可选事务 scope；Snap/Clamp/Reject/级联修改后，最终画面均读取权威数据。
+
+接入契约见 [INTEGRATION_CONTRACT.md](Docs/INTEGRATION_CONTRACT.md)。事务型参考插件与 UE Automation 测试见 [Reference](Reference/README.md)。
 
 ### 1. 自绘编排条
 
@@ -46,45 +50,8 @@ Version 4 补齐了从 CAK 抽取时缺失的 **通用编辑闭环**：不再要
 - 可展开 Timing Rows、动态 Lane 高度与比例 Handle 编辑
 - 外部 ViewRange 模式
 - Mouse Capture / Escape / CaptureLost 生命周期
-- 拖动中的视觉 Preview
 
-### 2. 通用编辑闭环
-
-- `WeaverTimelineEditController.h/.cpp`
-- `SWeaverEditableTimeline.h/.cpp`
-
-这一层来自 CAK 已验证的 `Begin -> Preview -> Commit/Cancel -> authoritative data -> redraw` 工作方式，但去掉了 CharacterAction 业务。
-
-默认可编辑消费者应使用 `SWeaverEditableTimeline`：
-
-```text
-SWeaverTimeline
-    负责绘制 / HitTest / 手势 / Preview
-        ↓
-FWeaverTimelineEditController
-    负责 Begin / Preview / Commit / Cancel / Refresh
-        ↓
-IWeaverTimelineEditAdapter
-    负责真正业务数据写入
-```
-
-Controller 保证：
-
-- MouseUp 后一定重新从 authoritative source 构建 `FWeaverLane / FWeaverKey / FWeaverBlock`
-- Esc / CaptureLost 后一定重新读取 authoritative source
-- Commit 被业务拒绝时，UI 按 authoritative source 正确回退
-- Adapter 返回 `Accepted` 却没有真正持久化最终值时，记录 invariant error 并触发 `ensureMsgf`
-- Block 的展开状态作为 UI transient state 由通用层保留，不要求业务资产持久化
-
-业务 Adapter 仍然负责：
-
-- 真正的数据所有权
-- Undo/Redo Transaction
-- overlap / conflict / clamp 等业务规则
-- MovieScene / Asset / UObject 的 Modify 与持久化
-- 运行时语义
-
-### 3. Viewport 底部承载壳
+### 2. Viewport 底部承载壳
 
 - `SWeaverTimelineHost.h/.cpp`
 - `WeaverViewportOverlay.h/.cpp`
@@ -99,7 +66,7 @@ Controller 保证：
 
 它不理解任何业务数据。
 
-### 4. Sequencer 同步桥
+### 3. Sequencer 同步桥
 
 - `WeaverSequencerBridge.h/.cpp`
 
@@ -115,19 +82,6 @@ Controller 保证：
 
 业务插件仍然拥有自己的当前帧状态和业务求值；Bridge 只做编辑器时间/视图同步。
 
-## Reference Adapter
-
-`Reference/` 提供一个纯内存参考 Adapter，用来验证通用编辑闭环：
-
-- Block Move / ResizeStart / ResizeEnd 松手后保持
-- Key Drag 松手后保持
-- Timing Ratio 拖动松手后保持
-- Esc / CaptureLost 回滚
-- Commit reject 正确回退
-- Accepted-but-not-persisted 契约违规检测
-
-以后新业务 Adapter 应优先对照这份 Reference，而不是重新猜 `Finished` 以后还要做什么。
-
 ## Core 不负责什么
 
 Core 不认识也不持有以下业务概念：
@@ -139,6 +93,8 @@ Core 不认识也不持有以下业务概念：
 - Runtime 求值
 - Undo/Redo 的业务语义
 - 插件专属 Tab / ToolMenu / StyleSet 等全局注册
+
+业务插件通过 `IWeaverTimelineEditAdapter` 映射自己的数据并执行 Proposal。Core 接管通用编辑生命周期，具体业务语义仍属于消费者。
 
 ## 为什么不用共同插件依赖
 
@@ -156,21 +112,9 @@ Source/MyPluginEditor/Private/WeaverTimeline/
 
 不要修改复制后的 Core；业务差异放在插件自己的 Adapter / Panel 中。需要修改通用交互时，先改本仓库母版，再统一同步。
 
-对于需要 Key / Block / Timing 编辑的消费者，默认使用：
-
-```text
-IWeaverTimelineEditAdapter
-        ↓
-FWeaverTimelineEditController
-        ↓
-SWeaverEditableTimeline
-```
-
-直接使用低层 `SWeaverTimeline` 并自行处理全部 edit delegates，只保留给明确需要完全自定义生命周期的高级消费端。
-
 ### 基础依赖
 
-自绘 Timeline / EditableTimeline / Host 需要标准 Editor Slate 依赖，例如：
+自绘 Timeline / Host 需要标准 Editor Slate 依赖，例如：
 
 ```text
 Core
@@ -183,6 +127,6 @@ InputCore
 
 ## 当前状态
 
-Version 4 已把 CAK 的自绘 Timeline、Viewport Host/Overlay、Sequencer Sync Bridge，以及通用的编辑提交闭环抽入源码母版。
+V5 在已有自绘 Timeline、Viewport Host/Overlay 和 Sequencer Bridge 上补齐编辑闭环，并自带独立参考消费者。根目录仍是源码母版；`Reference/` 是测试插件。运行和验证记录见 [Reference README](Reference/README.md)。
 
-本仓库本身不是可直接启用的 `.uplugin`，所以这里 **不宣称 UE5 编译验证完成**。必须把 Version 4 Core 原样同步到真实消费者工程，并在 UE5.8 中编译和做鼠标回归验收。
+这不等于 CAK/CineWeaver/AudioHead 已完成 V5 迁移，也不等于真实鼠标、Sequencer 多窗口和业务实时预览已通过人工验收。

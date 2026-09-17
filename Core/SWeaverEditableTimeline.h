@@ -1,55 +1,38 @@
 #pragma once
 
-#include "CoreMinimal.h"
 #include "SWeaverTimeline.h"
 #include "WeaverTimelineEditController.h"
+#include "WeaverSequencerBridge.h"
 #include "Widgets/SCompoundWidget.h"
 
+/** Default editable entry point. Consumers supply authority/semantics, never Finished/SetBlocks wiring. */
 class SWeaverEditableTimeline final : public SCompoundWidget
 {
 public:
-    SLATE_BEGIN_ARGS(SWeaverEditableTimeline)
-        : _CurrentFrame(0.0)
-        , _RulerHeight(24.0f)
-        , _LaneHeight(36.0f)
-        , _LabelWidth(148.0f)
-    {}
-        SLATE_ATTRIBUTE(double, CurrentFrame)
-        SLATE_ARGUMENT(float, RulerHeight)
-        SLATE_ARGUMENT(float, LaneHeight)
-        SLATE_ARGUMENT(float, LabelWidth)
-        SLATE_ARGUMENT(TSharedPtr<FWeaverTimelineEditController>, EditController)
+    SLATE_BEGIN_ARGS(SWeaverEditableTimeline) : _SyncSequencer(false) {}
+        SLATE_ARGUMENT(TSharedPtr<IWeaverTimelineEditAdapter>, Adapter)
+        SLATE_ARGUMENT(bool, SyncSequencer)
+        SLATE_ARGUMENT(FWeaverSequencerBridge::FDisplayRateProvider, DisplayRateProvider)
         SLATE_EVENT(FOnWeaverFrameChanged, OnFrameChanged)
         SLATE_EVENT(FOnWeaverSelectionChanged, OnSelectionChanged)
-        SLATE_EVENT(FOnWeaverDeleteRequested, OnDeleteRequested)
         SLATE_EVENT(FOnWeaverContextRequested, OnContextRequested)
-        SLATE_EVENT(FOnWeaverViewRangeChanged, OnViewRangeChanged)
-        SLATE_EVENT(FOnWeaverLaneHeaderActionRequested, OnLaneHeaderActionRequested)
-        SLATE_EVENT(FOnWeaverBlockEndpointClicked, OnBlockEndpointClicked)
         SLATE_EVENT(FOnWeaverLaneContextRequested, OnLaneContextRequested)
-        SLATE_EVENT(FOnWeaverBlockExpansionChanged, OnBlockExpansionChanged)
     SLATE_END_ARGS()
-
     void Construct(const FArguments& InArgs);
-    virtual ~SWeaverEditableTimeline() override;
-
-    TSharedPtr<SWeaverTimeline> GetTimeline() const { return Timeline; }
-    TSharedPtr<FWeaverTimelineEditController> GetEditController() const { return EditController; }
-
-    void RefreshFromSource();
-
-    void SetSelection(const FWeaverSelection& InSelection);
-    void ClearSelection();
-    const FWeaverSelection* GetSelection() const;
-
-    void SetExternalViewRange(double StartFrame, double EndFrame);
-    void ClearExternalViewRange();
-    void SetHorizontalPadding(float Left, float Right);
-
+    virtual ~SWeaverEditableTimeline();
+    virtual void Tick(const FGeometry& Geometry, double CurrentTime, float DeltaTime) override;
+    TSharedRef<FWeaverTimelineEditController> GetController() const { return Controller.ToSharedRef(); }
+    TSharedRef<SWeaverTimeline> GetTimeline() const { return Timeline.ToSharedRef(); }
+    void Deactivate();
+    void SetCurrentFrame(double Frame);
+    double GetCurrentFrame() const { return CurrentFrame; }
 private:
-    void HandleBlockExpansionChanged(FGuid BlockId, bool bExpanded);
-
+    void Begin(EWeaverEditTarget Target, FGuid Lane, FGuid Item, EWeaverBlockEditKind Kind, FName Row = NAME_None);
+    void FrameChanged(double Frame);
     TSharedPtr<SWeaverTimeline> Timeline;
-    TSharedPtr<FWeaverTimelineEditController> EditController;
-    FOnWeaverBlockExpansionChanged ExternalOnBlockExpansionChanged;
+    TSharedPtr<FWeaverTimelineEditController> Controller;
+    FWeaverSequencerBridge Bridge;
+    FOnWeaverFrameChanged OnFrameChanged;
+    double CurrentFrame = 0;
+    bool bNotifyingFrame = false;
 };

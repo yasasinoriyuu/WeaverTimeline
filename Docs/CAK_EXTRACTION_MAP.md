@@ -22,34 +22,28 @@ Source/CharacterActionKitPlannerEditor/Private/CharacterActionPlannerViewportOve
 Source/CharacterActionKitPlannerEditor/Private/SCharacterActionPlannerPanel.h/.cpp
 ```
 
-## What CAK actually proved
-
-CAK's stable block move is not only a Slate gesture. It is a complete edit loop:
-
-```text
-MouseDown
-  -> FCharacterActionPlannerModel::BeginMoveBlock
-MouseMove
-  -> PreviewMoveBlock
-  -> timeline paints PreviewStartFrame
-MouseUp
-  -> CommitMoveBlock
-  -> authoritative Arrangement changes
-  -> drag preview resets
-  -> next paint reads the committed Arrangement value
-CaptureLost
-  -> preview state resets without committing
-```
-
-`CharacterActionPlannerModel.h` explicitly states that persistent mutation happens on MouseUp, while pointer movement uses preview state instead of high-frequency asset writes.
-
-This lifecycle is the behavior reference for WeaverTimeline Version 4.
-
 ## Extracted into WeaverTimeline
+
+### Editing lifecycle (V5)
+
+The V4 controller introduced mandatory authority refresh. V5 retains that direction and completes the session contract; it replaces the V4 rule that an Accepted result must equal the pointer proposal.
+
+| CAK collaboration | Business-neutral V5 responsibility |
+| --- | --- |
+| Timeline reads Arrangement authority on paint | Adapter builds full authoritative presentation after every terminal path |
+| PlannerModel BeginMove / PreviewMove / CommitMove | Session keeps Original and Proposal separate until commit |
+| PlannerModel conflict resolution and following-block adjustment | Applied may resolve a different value or change multiple objects; authority wins |
+| Short FScopedTransaction and Arrangement.Modify | Consumer supplies a commit-only transaction scope and its own authoritative objects |
+| Panel forwards transient preview to PlaybackComponent; AnimNode applies it to a cached track | BeginPreview / UpdatePreview / EndPreview extension points, with cleanup owned by the controller |
+| Panel notifies durable changes to playback and cached evaluation | Source notifications and post-reconciliation notification, including consumer Undo/Redo wiring |
+
+Arrangement, PlaybackComponent and AnimNode belong to the complete CAK system being studied, but their concrete data and algorithms stay out of Core. V5 Session identity, stale-source cancellation, command routing and teardown guarantees are explicit generic infrastructure with their own reference tests; they are not claims that CAK already implemented every edge case.
+
+The runnable transactional consumer now lives under `Reference/Source/WeaverTimelineReference`. It replaces the V4 plain-memory `Reference/WeaverTimelineReferenceAdapter.*` draft. See `INTEGRATION_CONTRACT.md` for migration and `VALIDATION_V5.md` for measured results.
 
 ### Timeline interaction core
 
-From `SCharacterActionPlannerTimeline` and the CineWeaver neutralization passes:
+From `SCharacterActionPlannerTimeline` and the first CineWeaver neutralization pass:
 
 - self-drawn Slate timeline
 - ruler and playhead
@@ -60,8 +54,6 @@ From `SCharacterActionPlannerTimeline` and the CineWeaver neutralization passes:
 - key drag lifecycle
 - block move lifecycle
 - block edge resize lifecycle
-- endpoint click vs drag threshold
-- expandable timing rows and ratio handles
 - scrub
 - horizontal pan
 - wheel zoom
@@ -71,32 +63,6 @@ From `SCharacterActionPlannerTimeline` and the CineWeaver neutralization passes:
 - external visible-range mode
 
 The source master generalizes identity to stable `LaneId / KeyId / BlockId` instead of treating array index as business identity.
-
-### Generic edit-session closure (Version 4)
-
-Version 3 stopped at generic drag delegates. That was too thin: every consumer still had to remember to translate `Finished` into authoritative persistence and then re-feed the timeline.
-
-Version 4 extracts the reusable part of CAK's `Begin -> Preview -> Commit/Cancel -> authoritative redraw` pattern into:
-
-```text
-FWeaverTimelineEditController
-SWeaverEditableTimeline
-IWeaverTimelineEditAdapter
-```
-
-The Controller is business-neutral. It does not know about Arrangement, MovieScene, Camera, Action, Audio, UObject transactions, overlap rules, or runtime evaluation.
-
-It does guarantee the generic lifecycle:
-
-```text
-Begin
-  -> optional external transient preview
-  -> Commit or Cancel
-  -> rebuild authoritative presentation
-  -> re-feed SWeaverTimeline
-```
-
-It also verifies the central invariant: if an Adapter returns `Accepted`, the rebuilt authoritative Key / Block / Timing Row must match the requested final value. This prevents a consumer from reporting success while the UI silently snaps back because nothing was persisted.
 
 ### Viewport host
 
@@ -151,31 +117,26 @@ The following remain CAK business behavior and should not move into WeaverTimeli
 - action display-name resolution
 - Strength / FrameInterval menus
 - actor selection and binding
-- playback component preview state
+- concrete playback component fields and runtime evaluation; generic preview begin/update/end lifecycle belongs in Core
 - CharacterAction runtime evaluation
 - CAK asset creation and persistence
 - CAK quick action palette
-- CAK-specific `FScopedTransaction` text and `Arrangement.Modify()` calls
 
-For other consumers, their Adapter owns the corresponding business persistence and transaction logic.
-
-## Reference consumer
-
-`Reference/WeaverTimelineReferenceAdapter.*` is the canonical pure-memory consumer for Version 4. It exists so future adapters can compare against one known-good implementation instead of re-deriving the edit contract from prose.
+If another plugin later needs a visually similar feature, it should first be implemented in that plugin's Adapter. Only behavior that is genuinely business-neutral should be promoted into the source master.
 
 ## Current extraction status
 
-Source Version 4 contains:
+Source Version 2 contains the reusable parts of CAK's complete editor shell:
 
 ```text
-self-drawn timeline             extracted
-edit-session closure            extracted
-reference adapter               provided
-viewport host                   extracted
-active viewport overlay         extracted
-sequencer time sync             extracted
-sequencer view sync             extracted
-sequencer track alignment       extracted
+self-drawn timeline        extracted
+viewport host              extracted
+active viewport overlay    extracted
+sequencer time sync        extracted
+sequencer view sync        extracted
+sequencer track alignment  extracted
 ```
 
-The next gate is consumer integration and UE5.8 compilation: sync the whole Version 4 `Core/` into CineWeaver, wire a business Adapter through `SWeaverEditableTimeline`, and validate the same mouse gestures in the real UE project.
+The list above describes the historical V2 shell, not a complete editing lifecycle. CAK paints directly from Arrangement authority, whereas V3 held manually refreshed presentation copies. CAK's model resolves conflicts and may change additional blocks, while its panel/playback path separately ends transient previews and notifies durable changes.
+
+V5 adds business-neutral Session/Context identity, proposal-based commit, full authority reconciliation, optional commit-only transaction scopes, external preview cleanup, source/Undo notifications and a mutation command path. The concrete Arrangement, conflict algorithm, actor and animation types stay in CAK. See INTEGRATION_CONTRACT.md and the transactional Reference consumer. CAK does not establish every generic interaction (for example Key/TimingRow editing and Esc); new guarantees require their own regression tests.

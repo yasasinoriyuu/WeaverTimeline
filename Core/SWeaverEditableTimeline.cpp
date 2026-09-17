@@ -2,135 +2,121 @@
 
 void SWeaverEditableTimeline::Construct(const FArguments& InArgs)
 {
-    EditController = InArgs._EditController;
-    ExternalOnBlockExpansionChanged = InArgs._OnBlockExpansionChanged;
-
-    checkf(
-        EditController.IsValid(),
-        TEXT("SWeaverEditableTimeline requires a valid FWeaverTimelineEditController."));
-
-    const TSharedRef<FWeaverTimelineEditController> ControllerRef = EditController.ToSharedRef();
-
+    check(InArgs._Adapter.IsValid());
+    Controller = MakeShared<FWeaverTimelineEditController>(InArgs._Adapter.ToSharedRef());
+    OnFrameChanged = InArgs._OnFrameChanged;
     ChildSlot
     [
         SAssignNew(Timeline, SWeaverTimeline)
-        .CurrentFrame(InArgs._CurrentFrame)
-        .RulerHeight(InArgs._RulerHeight)
-        .LaneHeight(InArgs._LaneHeight)
-        .LabelWidth(InArgs._LabelWidth)
-        .OnFrameChanged(InArgs._OnFrameChanged)
+        .DeferDeleteSelectionToSource(true)
+        .CurrentFrame_Lambda([this]() { return CurrentFrame; })
+        .OnFrameChanged_Lambda([this](double Frame) { FrameChanged(Frame); Bridge.PushTimelineFrame(Frame); })
+        .OnViewRangeChanged_Lambda([this](double Start, double End) { Bridge.PushTimelineViewRange(Start, End); })
         .OnSelectionChanged(InArgs._OnSelectionChanged)
-        .OnKeyEditStarted(FOnWeaverKeyEditStarted::CreateSP(
-            ControllerRef,
-            &FWeaverTimelineEditController::HandleKeyEditStarted))
-        .OnKeyEditChanged(FOnWeaverKeyEditChanged::CreateSP(
-            ControllerRef,
-            &FWeaverTimelineEditController::HandleKeyEditChanged))
-        .OnKeyEditFinished(FOnWeaverKeyEditFinished::CreateSP(
-            ControllerRef,
-            &FWeaverTimelineEditController::HandleKeyEditFinished))
-        .OnBlockEditStarted(FOnWeaverBlockEditStarted::CreateSP(
-            ControllerRef,
-            &FWeaverTimelineEditController::HandleBlockEditStarted))
-        .OnBlockEditChanged(FOnWeaverBlockEditChanged::CreateSP(
-            ControllerRef,
-            &FWeaverTimelineEditController::HandleBlockEditChanged))
-        .OnBlockEditFinished(FOnWeaverBlockEditFinished::CreateSP(
-            ControllerRef,
-            &FWeaverTimelineEditController::HandleBlockEditFinished))
-        .OnDeleteRequested(InArgs._OnDeleteRequested)
         .OnContextRequested(InArgs._OnContextRequested)
-        .OnViewRangeChanged(InArgs._OnViewRangeChanged)
-        .OnLaneHeaderActionRequested(InArgs._OnLaneHeaderActionRequested)
-        .OnBlockEndpointClicked(InArgs._OnBlockEndpointClicked)
         .OnLaneContextRequested(InArgs._OnLaneContextRequested)
-        .OnBlockExpansionChanged(this, &SWeaverEditableTimeline::HandleBlockExpansionChanged)
-        .OnTimingRowEditStarted(FOnWeaverTimingRowEditStarted::CreateSP(
-            ControllerRef,
-            &FWeaverTimelineEditController::HandleTimingRowEditStarted))
-        .OnTimingRowEditChanged(FOnWeaverTimingRowEditChanged::CreateSP(
-            ControllerRef,
-            &FWeaverTimelineEditController::HandleTimingRowEditChanged))
-        .OnTimingRowEditFinished(FOnWeaverTimingRowEditFinished::CreateSP(
-            ControllerRef,
-            &FWeaverTimelineEditController::HandleTimingRowEditFinished))
+        .OnKeyEditStarted_Lambda([this](FGuid Lane, FGuid Item, double)
+            { Begin(EWeaverEditTarget::Key, Lane, Item, EWeaverBlockEditKind::Move); })
+        .OnKeyEditChanged_Lambda([this](FGuid, FGuid, double Frame) { Controller->UpdateEdit(Frame, Frame); })
+        .OnKeyEditFinished_Lambda([this](FGuid, FGuid, double Frame, bool Cancelled) { Controller->FinishEdit(Frame, Frame, Cancelled); })
+        .OnBlockEditStarted_Lambda([this](FGuid Lane, FGuid Item, EWeaverBlockEditKind Kind)
+            { Begin(EWeaverEditTarget::Block, Lane, Item, Kind); })
+        .OnBlockEditChanged_Lambda([this](FGuid, FGuid, EWeaverBlockEditKind, double Start, double End)
+            { Controller->UpdateEdit(Start, End); })
+        .OnBlockEditFinished_Lambda([this](FGuid, FGuid, double Start, double End, bool Cancelled)
+            { Controller->FinishEdit(Start, End, Cancelled); })
+        .OnTimingRowEditStarted_Lambda([this](FGuid Lane, FGuid Item, FName Row, float, float)
+            { Begin(EWeaverEditTarget::TimingRow, Lane, Item, EWeaverBlockEditKind::Move, Row); })
+        .OnTimingRowEditChanged_Lambda([this](FGuid, FGuid, FName, float Start, float End) { Controller->UpdateEdit(Start, End); })
+        .OnTimingRowEditFinished_Lambda([this](FGuid, FGuid, FName, float Start, float End, bool Cancelled)
+            { Controller->FinishEdit(Start, End, Cancelled); })
+        .OnBlockExpansionChanged_Lambda([this](FGuid Item, bool Expanded) { Controller->SetBlockExpanded(Item, Expanded); })
+        .OnDeleteRequested_Lambda([this](EWeaverItemType Type, FGuid Lane, FGuid Item)
+        {
+            FWeaverEditProposal Command;
+            Command.Target = EWeaverEditTarget::Command;
+            Command.CommandId = TEXT("Delete");
+            Command.ItemType = Type;
+            Command.LaneId = Lane;
+            Command.ItemId = Item;
+            Controller->ExecuteCommand(Command);
+        })
+        .OnLaneHeaderActionRequested_Lambda([this](FGuid Lane, FName Action)
+        {
+            FWeaverEditProposal Command;
+            Command.Target = EWeaverEditTarget::Command;
+            Command.CommandId = Action;
+            Command.LaneId = Lane;
+            Controller->ExecuteCommand(Command);
+        })
+        .OnBlockEndpointClicked_Lambda([this](FGuid, FGuid Item, bool Start)
+        {
+            for (const auto& Block : Controller->GetPresentation().Blocks)
+            {
+                if (Block.BlockId == Item)
+                {
+                    const double Frame = Start ? Block.StartFrame : Block.EndFrame;
+                    FrameChanged(Frame);
+                    Bridge.PushTimelineFrame(Frame);
+                    break;
+                }
+            }
+        })
     ];
-
-    EditController->AttachTimeline(Timeline.ToSharedRef());
+    Controller->AttachTimeline(Timeline.ToSharedRef());
+    if (InArgs._SyncSequencer)
+    {
+        Bridge.Register(Timeline.ToSharedRef(), InArgs._DisplayRateProvider,
+            FOnWeaverSequencerFrameChanged::CreateSP(this, &SWeaverEditableTimeline::FrameChanged),
+            FSimpleDelegate::CreateLambda([Weak = TWeakPtr<FWeaverTimelineEditController>(Controller)]()
+            {
+                if (auto Pinned = Weak.Pin()) { Pinned->CancelEdit(EWeaverEditEndReason::SourceChanged); }
+            }));
+    }
 }
 
 SWeaverEditableTimeline::~SWeaverEditableTimeline()
 {
-    if (EditController.IsValid())
-    {
-        EditController->DetachTimeline(Timeline);
-    }
+    Bridge.Unregister();
+    if (Controller) { Controller->DetachTimeline(); }
+    if (Timeline) { Timeline->UnbindCallbacks(); }
 }
 
-void SWeaverEditableTimeline::RefreshFromSource()
+void SWeaverEditableTimeline::Tick(const FGeometry& Geometry, double Time, float DeltaTime)
 {
-    if (EditController.IsValid())
-    {
-        EditController->RefreshFromSource();
-    }
+    Controller->Tick();
+    Bridge.Sync(Timeline->GetCachedGeometry());
+    SCompoundWidget::Tick(Geometry, Time, DeltaTime);
 }
 
-void SWeaverEditableTimeline::SetSelection(const FWeaverSelection& InSelection)
+void SWeaverEditableTimeline::Begin(EWeaverEditTarget Target, FGuid Lane, FGuid Item, EWeaverBlockEditKind Kind, FName Row)
 {
-    if (Timeline.IsValid())
-    {
-        Timeline->SetSelection(InSelection);
-    }
+    FWeaverEditProposal Proposal;
+    Proposal.Target = Target;
+    Proposal.ItemType = Target == EWeaverEditTarget::Key ? EWeaverItemType::Key : EWeaverItemType::Block;
+    Proposal.LaneId = Lane;
+    Proposal.ItemId = Item;
+    Proposal.BlockKind = Kind;
+    Proposal.RowId = Row;
+    if (!Controller->BeginEdit(Proposal)) { Timeline->CancelInteraction(); }
 }
 
-void SWeaverEditableTimeline::ClearSelection()
+void SWeaverEditableTimeline::Deactivate()
 {
-    if (Timeline.IsValid())
-    {
-        Timeline->ClearSelection();
-    }
+    Controller->CancelEdit(EWeaverEditEndReason::Hidden);
 }
 
-const FWeaverSelection* SWeaverEditableTimeline::GetSelection() const
+void SWeaverEditableTimeline::SetCurrentFrame(double Frame)
 {
-    return Timeline.IsValid() ? &Timeline->GetSelection() : nullptr;
+    if (!FMath::IsFinite(Frame)) { return; }
+    CurrentFrame = Frame;
+    Timeline->Invalidate(EInvalidateWidgetReason::Paint);
 }
 
-void SWeaverEditableTimeline::SetExternalViewRange(
-    const double StartFrame,
-    const double EndFrame)
+void SWeaverEditableTimeline::FrameChanged(double Frame)
 {
-    if (Timeline.IsValid())
-    {
-        Timeline->SetExternalViewRange(StartFrame, EndFrame);
-    }
-}
-
-void SWeaverEditableTimeline::ClearExternalViewRange()
-{
-    if (Timeline.IsValid())
-    {
-        Timeline->ClearExternalViewRange();
-    }
-}
-
-void SWeaverEditableTimeline::SetHorizontalPadding(
-    const float Left,
-    const float Right)
-{
-    if (Timeline.IsValid())
-    {
-        Timeline->SetHorizontalPadding(Left, Right);
-    }
-}
-
-void SWeaverEditableTimeline::HandleBlockExpansionChanged(
-    const FGuid BlockId,
-    const bool bExpanded)
-{
-    if (EditController.IsValid())
-    {
-        EditController->SetBlockExpanded(BlockId, bExpanded);
-    }
-    ExternalOnBlockExpansionChanged.ExecuteIfBound(BlockId, bExpanded);
+    if (bNotifyingFrame || !FMath::IsFinite(Frame)) { return; }
+    TGuardValue<bool> Guard(bNotifyingFrame, true);
+    SetCurrentFrame(Frame);
+    OnFrameChanged.ExecuteIfBound(Frame);
 }

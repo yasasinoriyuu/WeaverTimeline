@@ -5,6 +5,7 @@
 
 class IAssetViewport;
 class SWidget;
+class SWeaverEditableTimeline;
 
 /**
  * Attaches arbitrary orchestration UI to the bottom of the active Level Editor viewport.
@@ -19,7 +20,11 @@ public:
     void Register(
         const TSharedRef<SWidget>& InContent,
         const FText& InCollapsedLabel,
-        float InExpandedHeight = 300.0f);
+        float InExpandedHeight = 300.0f,
+        FSimpleDelegate InOnDeactivated = FSimpleDelegate());
+    /** Preferred editable path; hide, collapse, viewport detach and unregister cancel active edits. */
+    void RegisterEditable(const TSharedRef<SWeaverEditableTimeline>& InContent,
+        const FText& InCollapsedLabel, float InExpandedHeight = 300.0f);
     void Unregister();
     void SetVisible(bool bInVisible);
 
@@ -35,4 +40,5 @@ private:
     TWeakPtr<IAssetViewport> AttachedViewport;
     FTSTicker::FDelegateHandle TickerHandle;
     bool bVisible = true;
+    FSimpleDelegate OnDeactivated;
 };

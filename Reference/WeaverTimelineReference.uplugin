@@ -1,0 +1,10 @@
+{
+    "FileVersion": 3,
+    "Version": 5,
+    "VersionName": "5",
+    "FriendlyName": "WeaverTimeline 参考消费者",
+    "Description": "Transactional reference consumer and lifecycle automation tests.",
+    "Category": "Editor",
+    "CanContainContent": false,
+    "Modules": [{ "Name": "WeaverTimelineReference", "Type": "Editor", "LoadingPhase": "PostEngineInit" }]
+}

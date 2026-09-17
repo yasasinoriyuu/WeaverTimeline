@@ -20,6 +20,7 @@ public:
         SLATE_DEFAULT_SLOT(FArguments, Content)
         SLATE_ARGUMENT(float, ExpandedHeight)
         SLATE_ARGUMENT(FText, CollapsedLabel)
+        SLATE_EVENT(FSimpleDelegate, OnDeactivated)
     SLATE_END_ARGS()
 
     void Construct(const FArguments& InArgs);
@@ -50,4 +51,5 @@ private:
     bool bCollapsed = false;
     bool bResizing = false;
     FText CollapsedLabel;
+    FSimpleDelegate OnDeactivated;
 };

@@ -8,6 +8,7 @@
 class ISequencer;
 class SWidget;
 class SWeaverTimeline;
+class UMovieSceneSequence;
 
 DECLARE_DELEGATE_OneParam(FOnWeaverSequencerFrameChanged, double)
 
@@ -33,7 +34,8 @@ public:
     void Register(
         const TSharedRef<SWeaverTimeline>& InTimeline,
         FDisplayRateProvider InDisplayRateProvider,
-        FOnWeaverSequencerFrameChanged InOnSequencerFrameChanged);
+        FOnWeaverSequencerFrameChanged InOnSequencerFrameChanged,
+        FSimpleDelegate InOnContextChanged = FSimpleDelegate());
     void Unregister();
 
     /** Call from the owning Slate widget's Tick using the timeline widget geometry. */
@@ -62,6 +64,9 @@ private:
 
     FDisplayRateProvider DisplayRateProvider;
     FOnWeaverSequencerFrameChanged OnSequencerFrameChanged;
+    FSimpleDelegate OnContextChanged;
+    TWeakObjectPtr<UMovieSceneSequence> FocusedSequence;
+    bool bNotifyingTime = false;
 
     bool bHasAppliedPadding = false;
     float LastAppliedLeftPadding = 0.0f;

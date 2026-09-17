@@ -31,11 +31,13 @@ public:
         , _RulerHeight(24.0f)
         , _LaneHeight(36.0f)
         , _LabelWidth(148.0f)
+        , _DeferDeleteSelectionToSource(false)
     {}
         SLATE_ATTRIBUTE(double, CurrentFrame)
         SLATE_ARGUMENT(float, RulerHeight)
         SLATE_ARGUMENT(float, LaneHeight)
         SLATE_ARGUMENT(float, LabelWidth)
+        SLATE_ARGUMENT(bool, DeferDeleteSelectionToSource)
         SLATE_EVENT(FOnWeaverFrameChanged, OnFrameChanged)
         SLATE_EVENT(FOnWeaverSelectionChanged, OnSelectionChanged)
         SLATE_EVENT(FOnWeaverKeyEditStarted, OnKeyEditStarted)
@@ -61,9 +63,15 @@ public:
     void SetLanes(TArray<FWeaverLane> InLanes);
     void SetKeys(TArray<FWeaverKey> InKeys);
     void SetBlocks(TArray<FWeaverBlock> InBlocks);
+    /** Atomic authority publication. Retains selection only while its stable ID still exists. */
+    void SetPresentation(TArray<FWeaverLane> InLanes, TArray<FWeaverKey> InKeys, TArray<FWeaverBlock> InBlocks);
+    void CancelInteraction();
+    void UnbindCallbacks();
+    const TArray<FWeaverBlock>& GetDisplayedBlocks() const { return Blocks; }
+    const TArray<FWeaverKey>& GetDisplayedKeys() const { return Keys; }
 
     void SetSelection(const FWeaverSelection& InSelection);
-    void ClearSelection();
+    void ClearSelection(bool bNotify = false);
     const FWeaverSelection& GetSelection() const { return Selection; }
 
     void SetExternalViewRange(double StartFrame, double EndFrame);
@@ -201,6 +209,7 @@ private:
     double ViewStartFrame = 0.0;
     double ViewEndFrame = 240.0;
     bool bExternalViewRange = false;
+    bool bDeferDeleteSelectionToSource = false;
     float RulerHeight = 24.0f;
     float LaneHeight = 36.0f;
     float LabelWidth = 148.0f;

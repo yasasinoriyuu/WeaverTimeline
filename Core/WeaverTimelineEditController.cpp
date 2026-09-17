@@ -1,390 +1,261 @@
 #include "WeaverTimelineEditController.h"
-
 #include "SWeaverTimeline.h"
 
-namespace
+FWeaverTimelineEditController::FWeaverTimelineEditController(TSharedRef<IWeaverTimelineEditAdapter> InAdapter)
+    : Adapter(InAdapter)
 {
-const FWeaverKey* FindKeyById(
-    const FWeaverTimelinePresentation& Presentation,
-    const FGuid& KeyId)
-{
-    return Presentation.Keys.FindByPredicate(
-        [&KeyId](const FWeaverKey& Key)
-        {
-            return Key.KeyId == KeyId;
-        });
+    SourceChangedHandle = Adapter->OnSourceChanged.AddRaw(this, &FWeaverTimelineEditController::HandleSourceChanged);
 }
 
-const FWeaverBlock* FindBlockById(
-    const FWeaverTimelinePresentation& Presentation,
-    const FGuid& BlockId)
+FWeaverTimelineEditController::~FWeaverTimelineEditController()
 {
-    return Presentation.Blocks.FindByPredicate(
-        [&BlockId](const FWeaverBlock& Block)
-        {
-            return Block.BlockId == BlockId;
-        });
+    Adapter->OnSourceChanged.Remove(SourceChangedHandle);
+    DetachTimeline();
 }
 
-const FWeaverTimingRow* FindTimingRowById(
-    const FWeaverTimelinePresentation& Presentation,
-    const FGuid& BlockId,
-    const FName RowId)
+void FWeaverTimelineEditController::AttachTimeline(TSharedRef<SWeaverTimeline> InTimeline)
 {
-    const FWeaverBlock* Block = FindBlockById(Presentation, BlockId);
-    return Block
-        ? Block->TimingRows.FindByPredicate(
-            [RowId](const FWeaverTimingRow& Row)
-            {
-                return Row.RowId == RowId;
-            })
-        : nullptr;
-}
-}
-
-FWeaverTimelineEditController::FWeaverTimelineEditController(
-    TSharedRef<IWeaverTimelineEditAdapter> InAdapter)
-    : Adapter(MoveTemp(InAdapter))
-{
-}
-
-void FWeaverTimelineEditController::AttachTimeline(
-    const TSharedRef<SWeaverTimeline>& InTimeline)
-{
+    DetachTimeline();
     Timeline = InTimeline;
+    bAttached = true;
     RefreshFromSource();
 }
 
-void FWeaverTimelineEditController::DetachTimeline(
-    const TSharedPtr<SWeaverTimeline>& InTimeline)
+void FWeaverTimelineEditController::DetachTimeline()
 {
-    if (!InTimeline.IsValid() || Timeline.Pin() == InTimeline)
-    {
-        Timeline.Reset();
-    }
+    bAttached = false; // Reentrant callbacks cannot start another edit during detach.
+    CancelEdit(EWeaverEditEndReason::Detached);
+    Timeline.Reset();
 }
 
-FWeaverTimelinePresentation FWeaverTimelineEditController::BuildPresentation()
+void FWeaverTimelineEditController::HandleSourceChanged()
 {
-    FWeaverTimelinePresentation Presentation;
-    Adapter->BuildPresentation(Presentation);
-
-    TSet<FGuid> NextExpandedBlockIds;
-    for (FWeaverBlock& Block : Presentation.Blocks)
-    {
-        if (ExpandedBlockIds.Contains(Block.BlockId) || Block.bExpanded)
-        {
-            Block.bExpanded = true;
-            NextExpandedBlockIds.Add(Block.BlockId);
-        }
-    }
-    ExpandedBlockIds = MoveTemp(NextExpandedBlockIds);
-    return Presentation;
+    bSourceInvalidated = true;
+    RefreshFromSource();
 }
 
-void FWeaverTimelineEditController::ApplyPresentation(
-    FWeaverTimelinePresentation&& Presentation)
+void FWeaverTimelineEditController::Tick()
 {
-    if (const TSharedPtr<SWeaverTimeline> PinnedTimeline = Timeline.Pin())
+    if (!bDispatching && PendingCancelReason.IsSet())
     {
-        PinnedTimeline->SetLanes(MoveTemp(Presentation.Lanes));
-        PinnedTimeline->SetKeys(MoveTemp(Presentation.Keys));
-        PinnedTimeline->SetBlocks(MoveTemp(Presentation.Blocks));
+        const auto Reason = *PendingCancelReason;
+        PendingCancelReason.Reset();
+        CancelEdit(Reason);
+    }
+    if (bRefreshPending || bSourceInvalidated || Adapter->GetContext() != PresentedContext)
+    {
+        RefreshFromSource();
     }
 }
 
 void FWeaverTimelineEditController::RefreshFromSource()
 {
-    ApplyPresentation(BuildPresentation());
-}
-
-void FWeaverTimelineEditController::SetBlockExpanded(
-    const FGuid& BlockId,
-    const bool bExpanded)
-{
-    if (!BlockId.IsValid())
+    if (bDispatching)
     {
+        bRefreshPending = true;
         return;
     }
-
-    if (bExpanded)
+    if (ActiveSession.IsSet() && (bSourceInvalidated || Adapter->GetContext() != ActiveSession->Context))
     {
-        ExpandedBlockIds.Add(BlockId);
+        CancelEdit(EWeaverEditEndReason::SourceChanged);
+        return; // Complete performs the read, even if cancellation had no data mutation.
     }
-    else
+    if (bSourceInvalidated || Adapter->GetContext() != PresentedContext)
     {
-        ExpandedBlockIds.Remove(BlockId);
+        // Also cancel pending endpoint clicks, scrub and pan before publishing a new context.
+        if (auto Widget = Timeline.Pin()) { Widget->CancelInteraction(); }
     }
-}
-
-void FWeaverTimelineEditController::SetValidationError(const FString& Error)
-{
-    LastValidationError = Error;
-    if (!LastValidationError.IsEmpty())
+    TGuardValue<bool> Guard(bDispatching, true);
+    bRefreshPending = false;
+    bSourceInvalidated = false;
+    const FWeaverSourceContext Context = Adapter->GetContext();
+    FWeaverTimelinePresentation Fresh;
+    Adapter->BuildPresentation(Fresh);
+    if (Context != Adapter->GetContext())
     {
-        ensureMsgf(false, TEXT("WeaverTimeline edit invariant failed: %s"), *LastValidationError);
-    }
-}
-
-void FWeaverTimelineEditController::ValidateCommittedKey(
-    const FWeaverTimelinePresentation& Presentation,
-    const FGuid& KeyId,
-    const double FinalFrame,
-    const EWeaverEditCommitResult CommitResult)
-{
-    if (CommitResult != EWeaverEditCommitResult::Accepted)
-    {
+        bRefreshPending = true; // Never publish a torn source/context snapshot.
         return;
     }
-
-    const FWeaverKey* Key = FindKeyById(Presentation, KeyId);
-    if (!Key)
+    if (PresentedContext.Id != Context.Id)
     {
-        SetValidationError(FString::Printf(
-            TEXT("Accepted key commit removed KeyId=%s from authoritative presentation."),
-            *KeyId.ToString()));
+        ExpansionOverrides.Reset();
+        if (auto Widget = Timeline.Pin()) { Widget->ClearSelection(true); }
+    }
+    PresentedContext = Context;
+    Presentation = MoveTemp(Fresh);
+    ApplyPresentation();
+    OnReconciled.Broadcast(PresentedContext, LastResult);
+}
+
+void FWeaverTimelineEditController::ApplyPresentation()
+{
+    TSet<FGuid> ExistingBlocks;
+    for (FWeaverBlock& Block : Presentation.Blocks)
+    {
+        ExistingBlocks.Add(Block.BlockId);
+        if (const bool* Expanded = ExpansionOverrides.Find(Block.BlockId)) { Block.bExpanded = *Expanded; }
+    }
+    for (auto It = ExpansionOverrides.CreateIterator(); It; ++It)
+    {
+        if (!ExistingBlocks.Contains(It.Key())) { It.RemoveCurrent(); }
+    }
+    if (auto Widget = Timeline.Pin())
+    {
+        Widget->SetPresentation(Presentation.Lanes, Presentation.Keys, Presentation.Blocks);
+    }
+}
+
+bool FWeaverTimelineEditController::ReadOriginal(FWeaverEditProposal& Proposal) const
+{
+    if (Proposal.Target == EWeaverEditTarget::Command) { return true; }
+    const auto* Lane = Presentation.Lanes.FindByPredicate([&](const FWeaverLane& Candidate) { return Candidate.LaneId == Proposal.LaneId; });
+    if (!Lane || !Lane->bEnabled) { return false; }
+    if (Proposal.Target == EWeaverEditTarget::Key)
+    {
+        for (const FWeaverKey& Key : Presentation.Keys)
+        {
+            if (Key.KeyId == Proposal.ItemId && Key.LaneId == Proposal.LaneId && Key.bEnabled)
+            {
+                Proposal.Start = Proposal.End = Key.Frame;
+                return true;
+            }
+        }
+        return false;
+    }
+    for (const FWeaverBlock& Block : Presentation.Blocks)
+    {
+        if (Block.BlockId != Proposal.ItemId || Block.LaneId != Proposal.LaneId || !Block.bEnabled) { continue; }
+        if (Proposal.Target == EWeaverEditTarget::Block)
+        {
+            if (Proposal.BlockKind != EWeaverBlockEditKind::Move && !Block.bResizable) { return false; }
+            Proposal.Start = Block.StartFrame;
+            Proposal.End = Block.EndFrame;
+            return true;
+        }
+        for (const FWeaverTimingRow& Row : Block.TimingRows)
+        {
+            if (Row.RowId == Proposal.RowId && Row.bEnabled)
+            {
+                Proposal.Start = Row.StartRatio;
+                Proposal.End = Row.EndRatio;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool FWeaverTimelineEditController::BeginEdit(const FWeaverEditProposal& Proposal)
+{
+    if (bDispatching || !bAttached || ActiveSession.IsSet()) { return false; }
+    if (bSourceInvalidated || Adapter->GetContext() != PresentedContext)
+    {
+        RefreshFromSource();
+        return false; // The pointer hit belongs to the old presentation. Require a fresh gesture.
+    }
+    RefreshFromSource();
+    FWeaverEditProposal Original = Proposal;
+    if (!PresentedContext.Id.IsValid() || Adapter->GetContext() != PresentedContext || !ReadOriginal(Original))
+    {
+        if (auto Widget = Timeline.Pin()) { Widget->CancelInteraction(); }
+        return false;
+    }
+    FWeaverEditSession Session;
+    Session.Id = FGuid::NewGuid();
+    Session.Context = PresentedContext;
+    Session.Original = Original;
+    Session.Proposal = Original;
+    ActiveSession = Session;
+    {
+        TGuardValue<bool> Guard(bDispatching, true);
+        Adapter->BeginPreview(Session);
+    }
+    Tick(); // Source replacement during BeginPreview cancels before the next pointer event.
+    return ActiveSession.IsSet();
+}
+
+void FWeaverTimelineEditController::UpdateEdit(double Start, double End)
+{
+    if (bDispatching || !ActiveSession.IsSet()) { return; }
+    if (bSourceInvalidated || Adapter->GetContext() != ActiveSession->Context)
+    {
+        CancelEdit(EWeaverEditEndReason::SourceChanged);
         return;
     }
-
-    if (!FMath::IsNearlyEqual(Key->Frame, FinalFrame, 1e-6))
+    if (!FMath::IsFinite(Start) || !FMath::IsFinite(End)) { CancelEdit(); return; }
+    ActiveSession->Proposal.Start = Start;
+    ActiveSession->Proposal.End = End;
+    const FWeaverEditSession Snapshot = *ActiveSession;
     {
-        SetValidationError(FString::Printf(
-            TEXT("Accepted key commit did not persist. KeyId=%s Requested=%.6f Authoritative=%.6f"),
-            *KeyId.ToString(),
-            FinalFrame,
-            Key->Frame));
+        TGuardValue<bool> Guard(bDispatching, true);
+        Adapter->UpdatePreview(Snapshot);
     }
+    Tick();
 }
 
-void FWeaverTimelineEditController::ValidateCommittedBlock(
-    const FWeaverTimelinePresentation& Presentation,
-    const FGuid& BlockId,
-    const double FinalStart,
-    const double FinalEnd,
-    const EWeaverEditCommitResult CommitResult)
+void FWeaverTimelineEditController::FinishEdit(double Start, double End, bool bCancelled)
 {
-    if (CommitResult != EWeaverEditCommitResult::Accepted)
+    if (bDispatching || !ActiveSession.IsSet()) { return; }
+    if (bCancelled || !FMath::IsFinite(Start) || !FMath::IsFinite(End)) { CancelEdit(); return; }
+    ActiveSession->Proposal.Start = Start;
+    ActiveSession->Proposal.End = End;
+    Complete(true, EWeaverEditEndReason::Finished);
+}
+
+void FWeaverTimelineEditController::CancelEdit(EWeaverEditEndReason Reason)
+{
+    if (bDispatching)
     {
+        // Defer until the current external call returns. Never end a preview in its own callback.
+        PendingCancelReason = Reason;
+        bRefreshPending = true;
         return;
     }
-
-    const FWeaverBlock* Block = FindBlockById(Presentation, BlockId);
-    if (!Block)
-    {
-        SetValidationError(FString::Printf(
-            TEXT("Accepted block commit removed BlockId=%s from authoritative presentation."),
-            *BlockId.ToString()));
-        return;
-    }
-
-    if (!FMath::IsNearlyEqual(Block->StartFrame, FinalStart, 1e-6)
-        || !FMath::IsNearlyEqual(Block->EndFrame, FinalEnd, 1e-6))
-    {
-        SetValidationError(FString::Printf(
-            TEXT("Accepted block commit did not persist. BlockId=%s Requested=[%.6f, %.6f] Authoritative=[%.6f, %.6f]"),
-            *BlockId.ToString(),
-            FinalStart,
-            FinalEnd,
-            Block->StartFrame,
-            Block->EndFrame));
-    }
+    if (ActiveSession.IsSet()) { Complete(false, Reason); }
+    else if (auto Widget = Timeline.Pin()) { Widget->CancelInteraction(); }
 }
 
-void FWeaverTimelineEditController::ValidateCommittedTimingRow(
-    const FWeaverTimelinePresentation& Presentation,
-    const FGuid& BlockId,
-    const FName RowId,
-    const float FinalStartRatio,
-    const float FinalEndRatio,
-    const EWeaverEditCommitResult CommitResult)
+void FWeaverTimelineEditController::Complete(bool bCommit, EWeaverEditEndReason Reason)
 {
-    if (CommitResult != EWeaverEditCommitResult::Accepted)
+    if (bDispatching || !ActiveSession.IsSet()) { return; }
+    const FWeaverEditSession Session = *ActiveSession;
+    ActiveSession.Reset(); // Exactly-once termination, before any consumer or Slate callback.
     {
-        return;
+        TGuardValue<bool> Guard(bDispatching, true);
+        if (auto Widget = Timeline.Pin()) { Widget->CancelInteraction(); }
+        LastResult = { EWeaverEditOutcome::Cancelled, FText::GetEmpty() };
+        if (bCommit && !bSourceInvalidated && bAttached && Adapter->GetContext() == Session.Context)
+        {
+            auto Transaction = Adapter->BeginTransaction(Session);
+            if (!bSourceInvalidated && bAttached && Adapter->GetContext() == Session.Context)
+            {
+                LastResult = Adapter->Commit(Session);
+            }
+            else { Reason = EWeaverEditEndReason::SourceChanged; }
+            if (Transaction) { Transaction->Finish(LastResult.Outcome); }
+        }
+        else if (bCommit) { Reason = EWeaverEditEndReason::SourceChanged; }
+        Adapter->EndPreview(Session, LastResult, Reason);
     }
-
-    const FWeaverTimingRow* Row = FindTimingRowById(Presentation, BlockId, RowId);
-    if (!Row)
-    {
-        SetValidationError(FString::Printf(
-            TEXT("Accepted timing-row commit removed BlockId=%s RowId=%s from authoritative presentation."),
-            *BlockId.ToString(),
-            *RowId.ToString()));
-        return;
-    }
-
-    if (!FMath::IsNearlyEqual(Row->StartRatio, FinalStartRatio, 1e-5f)
-        || !FMath::IsNearlyEqual(Row->EndRatio, FinalEndRatio, 1e-5f))
-    {
-        SetValidationError(FString::Printf(
-            TEXT("Accepted timing-row commit did not persist. BlockId=%s RowId=%s Requested=[%.5f, %.5f] Authoritative=[%.5f, %.5f]"),
-            *BlockId.ToString(),
-            *RowId.ToString(),
-            FinalStartRatio,
-            FinalEndRatio,
-            Row->StartRatio,
-            Row->EndRatio));
-    }
+    PendingCancelReason.Reset(); // Session is already terminal; no second EndPreview.
+    RefreshFromSource(); // Full authoritative pull for Applied, Rejected, NoChange and Cancelled.
 }
 
-void FWeaverTimelineEditController::HandleKeyEditStarted(
-    const FGuid LaneId,
-    const FGuid KeyId,
-    const double OriginalFrame)
+FWeaverEditResult FWeaverTimelineEditController::ExecuteCommand(const FWeaverEditProposal& Command)
 {
-    LastValidationError.Reset();
-    Adapter->BeginKeyEdit(LaneId, KeyId, OriginalFrame);
-}
-
-void FWeaverTimelineEditController::HandleKeyEditChanged(
-    const FGuid LaneId,
-    const FGuid KeyId,
-    const double PreviewFrame)
-{
-    Adapter->PreviewKeyEdit(LaneId, KeyId, PreviewFrame);
-}
-
-void FWeaverTimelineEditController::HandleKeyEditFinished(
-    const FGuid LaneId,
-    const FGuid KeyId,
-    const double FinalFrame,
-    const bool bCancelled)
-{
-    EWeaverEditCommitResult CommitResult = EWeaverEditCommitResult::Rejected;
-    if (bCancelled)
+    if (bDispatching || !bAttached || Command.Target != EWeaverEditTarget::Command)
     {
-        Adapter->CancelKeyEdit(LaneId, KeyId);
+        return { EWeaverEditOutcome::Rejected, FText::FromString(TEXT("当前无法执行命令")) };
     }
-    else
-    {
-        CommitResult = Adapter->CommitKeyEdit(LaneId, KeyId, FinalFrame);
-    }
-
-    FWeaverTimelinePresentation Presentation = BuildPresentation();
-    ValidateCommittedKey(Presentation, KeyId, FinalFrame, CommitResult);
-    ApplyPresentation(MoveTemp(Presentation));
+    CancelEdit();
+    RefreshFromSource();
+    if (BeginEdit(Command)) { Complete(true, EWeaverEditEndReason::Finished); }
+    else { LastResult = { EWeaverEditOutcome::Rejected, FText::FromString(TEXT("数据源不可编辑")) }; }
+    return LastResult;
 }
 
-void FWeaverTimelineEditController::HandleBlockEditStarted(
-    const FGuid LaneId,
-    const FGuid BlockId,
-    const EWeaverBlockEditKind Kind)
+void FWeaverTimelineEditController::SetBlockExpanded(FGuid BlockId, bool bExpanded)
 {
-    LastValidationError.Reset();
-    ActiveBlockEditKind = Kind;
-    Adapter->BeginBlockEdit(LaneId, BlockId, Kind);
-}
-
-void FWeaverTimelineEditController::HandleBlockEditChanged(
-    const FGuid LaneId,
-    const FGuid BlockId,
-    const EWeaverBlockEditKind Kind,
-    const double PreviewStart,
-    const double PreviewEnd)
-{
-    ActiveBlockEditKind = Kind;
-    Adapter->PreviewBlockEdit(
-        LaneId,
-        BlockId,
-        Kind,
-        PreviewStart,
-        PreviewEnd);
-}
-
-void FWeaverTimelineEditController::HandleBlockEditFinished(
-    const FGuid LaneId,
-    const FGuid BlockId,
-    const double FinalStart,
-    const double FinalEnd,
-    const bool bCancelled)
-{
-    EWeaverEditCommitResult CommitResult = EWeaverEditCommitResult::Rejected;
-    if (bCancelled)
-    {
-        Adapter->CancelBlockEdit(LaneId, BlockId, ActiveBlockEditKind);
-    }
-    else
-    {
-        CommitResult = Adapter->CommitBlockEdit(
-            LaneId,
-            BlockId,
-            ActiveBlockEditKind,
-            FinalStart,
-            FinalEnd);
-    }
-
-    FWeaverTimelinePresentation Presentation = BuildPresentation();
-    ValidateCommittedBlock(
-        Presentation,
-        BlockId,
-        FinalStart,
-        FinalEnd,
-        CommitResult);
-    ApplyPresentation(MoveTemp(Presentation));
-    ActiveBlockEditKind = EWeaverBlockEditKind::Move;
-}
-
-void FWeaverTimelineEditController::HandleTimingRowEditStarted(
-    const FGuid LaneId,
-    const FGuid BlockId,
-    const FName RowId,
-    const float OriginalStartRatio,
-    const float OriginalEndRatio)
-{
-    LastValidationError.Reset();
-    Adapter->BeginTimingRowEdit(
-        LaneId,
-        BlockId,
-        RowId,
-        OriginalStartRatio,
-        OriginalEndRatio);
-}
-
-void FWeaverTimelineEditController::HandleTimingRowEditChanged(
-    const FGuid LaneId,
-    const FGuid BlockId,
-    const FName RowId,
-    const float PreviewStartRatio,
-    const float PreviewEndRatio)
-{
-    Adapter->PreviewTimingRowEdit(
-        LaneId,
-        BlockId,
-        RowId,
-        PreviewStartRatio,
-        PreviewEndRatio);
-}
-
-void FWeaverTimelineEditController::HandleTimingRowEditFinished(
-    const FGuid LaneId,
-    const FGuid BlockId,
-    const FName RowId,
-    const float FinalStartRatio,
-    const float FinalEndRatio,
-    const bool bCancelled)
-{
-    EWeaverEditCommitResult CommitResult = EWeaverEditCommitResult::Rejected;
-    if (bCancelled)
-    {
-        Adapter->CancelTimingRowEdit(LaneId, BlockId, RowId);
-    }
-    else
-    {
-        CommitResult = Adapter->CommitTimingRowEdit(
-            LaneId,
-            BlockId,
-            RowId,
-            FinalStartRatio,
-            FinalEndRatio);
-    }
-
-    FWeaverTimelinePresentation Presentation = BuildPresentation();
-    ValidateCommittedTimingRow(
-        Presentation,
-        BlockId,
-        RowId,
-        FinalStartRatio,
-        FinalEndRatio,
-        CommitResult);
-    ApplyPresentation(MoveTemp(Presentation));
+    ExpansionOverrides.Add(BlockId, bExpanded);
+    RefreshFromSource();
 }

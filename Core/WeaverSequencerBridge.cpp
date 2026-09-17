@@ -4,6 +4,7 @@
 #include "ISequencer.h"
 #include "LevelEditorSequencerIntegration.h"
 #include "MovieSceneFwd.h"
+#include "MovieSceneSequence.h"
 #include "SWeaverTimeline.h"
 #include "ViewRangeInterpolation.h"
 #include "Widgets/SWidget.h"
@@ -44,13 +45,15 @@ FWeaverSequencerBridge::~FWeaverSequencerBridge()
 void FWeaverSequencerBridge::Register(
     const TSharedRef<SWeaverTimeline>& InTimeline,
     FDisplayRateProvider InDisplayRateProvider,
-    FOnWeaverSequencerFrameChanged InOnSequencerFrameChanged)
+    FOnWeaverSequencerFrameChanged InOnSequencerFrameChanged,
+    FSimpleDelegate InOnContextChanged)
 {
     Unregister();
 
     Timeline = InTimeline;
     DisplayRateProvider = MoveTemp(InDisplayRateProvider);
     OnSequencerFrameChanged = MoveTemp(InOnSequencerFrameChanged);
+    OnContextChanged = MoveTemp(InOnContextChanged);
 
     BindingTickerHandle = FTSTicker::GetCoreTicker().AddTicker(
         FTickerDelegate::CreateRaw(this, &FWeaverSequencerBridge::TickBinding),
@@ -71,6 +74,7 @@ void FWeaverSequencerBridge::Unregister()
     Timeline.Reset();
     DisplayRateProvider = FDisplayRateProvider();
     OnSequencerFrameChanged.Unbind();
+    OnContextChanged.Unbind();
 }
 
 bool FWeaverSequencerBridge::TickBinding(float DeltaTime)
@@ -94,6 +98,11 @@ void FWeaverSequencerBridge::RefreshBinding()
 
     if (Candidate == Sequencer.Pin())
     {
+        if (Candidate && FocusedSequence.Get() != Candidate->GetFocusedMovieSceneSequence())
+        {
+            FocusedSequence = Candidate->GetFocusedMovieSceneSequence();
+            OnContextChanged.ExecuteIfBound();
+        }
         return;
     }
 
@@ -102,6 +111,8 @@ void FWeaverSequencerBridge::RefreshBinding()
 
     if (Candidate.IsValid())
     {
+        FocusedSequence = Candidate->GetFocusedMovieSceneSequence();
+        OnContextChanged.ExecuteIfBound();
         SequencerTrackAreaWidget = FindWeaverTrackAreaWidgetRecursive(
             Candidate->GetSequencerWidget());
         SequencerTimeChangedHandle = Candidate->OnGlobalTimeChanged().AddRaw(
@@ -113,6 +124,7 @@ void FWeaverSequencerBridge::RefreshBinding()
 
 void FWeaverSequencerBridge::DetachSequencer()
 {
+    const bool bHadBinding = SequencerTimeChangedHandle.IsValid();
     if (const TSharedPtr<ISequencer> Previous = Sequencer.Pin())
     {
         if (SequencerTimeChangedHandle.IsValid())
@@ -124,6 +136,8 @@ void FWeaverSequencerBridge::DetachSequencer()
     SequencerTimeChangedHandle.Reset();
     SequencerTrackAreaWidget.Reset();
     Sequencer.Reset();
+    FocusedSequence.Reset();
+    if (bHadBinding) { OnContextChanged.ExecuteIfBound(); }
 
     if (const TSharedPtr<SWeaverTimeline> TimelineWidget = Timeline.Pin())
     {
@@ -155,7 +169,7 @@ FFrameRate FWeaverSequencerBridge::ResolveDisplayRate(
 void FWeaverSequencerBridge::PushTimelineFrame(const double NewFrame)
 {
     const TSharedPtr<ISequencer> ActiveSequencer = Sequencer.Pin();
-    if (!ActiveSequencer.IsValid() || !FMath::IsFinite(NewFrame))
+    if (bNotifyingTime || !ActiveSequencer.IsValid() || !FMath::IsFinite(NewFrame))
     {
         return;
     }
@@ -192,6 +206,7 @@ void FWeaverSequencerBridge::PushTimelineViewRange(
 
 void FWeaverSequencerBridge::Sync(const FGeometry& TimelineGeometry)
 {
+    RefreshBinding(); // Detect sequence/window changes before each editable-frame tick.
     const TSharedPtr<ISequencer> ActiveSequencer = Sequencer.Pin();
     const TSharedPtr<SWeaverTimeline> TimelineWidget = Timeline.Pin();
     if (!ActiveSequencer.IsValid() || !TimelineWidget.IsValid())
@@ -261,6 +276,8 @@ void FWeaverSequencerBridge::Sync(const FGeometry& TimelineGeometry)
 
 void FWeaverSequencerBridge::HandleSequencerTimeChanged()
 {
+    if (bNotifyingTime) { return; }
+    TGuardValue<bool> Guard(bNotifyingTime, true);
     const TSharedPtr<ISequencer> ActiveSequencer = Sequencer.Pin();
     if (!ActiveSequencer.IsValid())
     {

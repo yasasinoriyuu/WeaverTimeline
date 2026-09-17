@@ -1,6 +1,8 @@
 #include "SWeaverTimeline.h"
 
 #include "InputCoreTypes.h"
+#include "Framework/Application/SlateApplication.h"
+#include "Framework/Application/SlateUser.h"
 #include "Rendering/DrawElements.h"
 #include "Styling/AppStyle.h"
 
@@ -44,6 +46,7 @@ void SWeaverTimeline::Construct(const FArguments& InArgs)
     RulerHeight = InArgs._RulerHeight;
     LaneHeight = InArgs._LaneHeight;
     LabelWidth = InArgs._LabelWidth;
+    bDeferDeleteSelectionToSource = InArgs._DeferDeleteSelectionToSource;
     LeftPadding = LabelWidth;
 
     OnFrameChanged = InArgs._OnFrameChanged;
@@ -89,10 +92,23 @@ void SWeaverTimeline::SetSelection(const FWeaverSelection& InSelection)
     ApplySelection(InSelection, false);
 }
 
-void SWeaverTimeline::ClearSelection()
+void SWeaverTimeline::ClearSelection(bool bNotify)
 {
     FWeaverSelection Empty;
-    ApplySelection(Empty, false);
+    ApplySelection(Empty, bNotify);
+}
+
+void SWeaverTimeline::UnbindCallbacks()
+{
+    OnFrameChanged.Unbind();
+    OnSelectionChanged.Unbind();
+    OnKeyEditStarted.Unbind(); OnKeyEditChanged.Unbind(); OnKeyEditFinished.Unbind();
+    OnBlockEditStarted.Unbind(); OnBlockEditChanged.Unbind(); OnBlockEditFinished.Unbind();
+    OnTimingRowEditStarted.Unbind(); OnTimingRowEditChanged.Unbind(); OnTimingRowEditFinished.Unbind();
+    OnDeleteRequested.Unbind(); OnContextRequested.Unbind(); OnViewRangeChanged.Unbind();
+    OnLaneHeaderActionRequested.Unbind(); OnBlockEndpointClicked.Unbind();
+    OnLaneContextRequested.Unbind(); OnBlockExpansionChanged.Unbind();
+    CurrentFrame = 0.0;
 }
 
 void SWeaverTimeline::SetExternalViewRange(const double StartFrame, const double EndFrame)
@@ -176,6 +192,37 @@ float SWeaverTimeline::LaneTop(const int32 LaneIndex) const
         Top += LaneHeightForIndex(Index);
     }
     return Top;
+}
+
+void SWeaverTimeline::SetPresentation(TArray<FWeaverLane> InLanes, TArray<FWeaverKey> InKeys, TArray<FWeaverBlock> InBlocks)
+{
+    Lanes = MoveTemp(InLanes);
+    Keys = MoveTemp(InKeys);
+    Blocks = MoveTemp(InBlocks);
+    if (Selection.IsValid())
+    {
+        FWeaverSelection Reconciled = Selection;
+        bool bFound = false;
+        if (Selection.Type == EWeaverItemType::Key)
+        {
+            if (const auto* Key = FindKey(Selection.ItemId)) { Reconciled.LaneId = Key->LaneId; bFound = true; }
+        }
+        else if (const auto* Block = FindBlock(Selection.ItemId)) { Reconciled.LaneId = Block->LaneId; bFound = true; }
+        if (!bFound || FindLaneIndex(Reconciled.LaneId) == INDEX_NONE) { Reconciled.Reset(); }
+        ApplySelection(Reconciled, true);
+    }
+    HoverSelection.Reset();
+    Invalidate(EInvalidateWidgetReason::Layout | EInvalidateWidgetReason::Paint);
+}
+
+void SWeaverTimeline::CancelInteraction()
+{
+    FinishPrimaryInteraction(true);
+    ResetRightMouseState();
+    if (FSlateApplication::IsInitialized() && HasMouseCapture())
+    {
+        FSlateApplication::Get().GetCursorUser()->ReleaseCursorCapture();
+    }
 }
 
 int32 SWeaverTimeline::ExpandedTimingRowCount(const int32 LaneIndex) const
@@ -972,19 +1019,18 @@ void SWeaverTimeline::BeginTimingRowDrag(
 
 void SWeaverTimeline::FinishPendingEndpointClick()
 {
-    if (DragItemId.IsValid() && PendingEndpointKind != EWeaverBlockEditKind::Move)
-    {
-        OnBlockEndpointClicked.ExecuteIfBound(
-            DragLaneId,
-            DragItemId,
-            PendingEndpointKind == EWeaverBlockEditKind::ResizeStart);
-    }
-
+    const FGuid Lane = DragLaneId;
+    const FGuid Item = DragItemId;
+    const auto Kind = PendingEndpointKind;
     DragMode = EDragMode::None;
     DragLaneId.Invalidate();
     DragItemId.Invalidate();
     PendingEndpointKind = EWeaverBlockEditKind::Move;
     Invalidate(EInvalidateWidgetReason::Paint);
+    if (Item.IsValid() && Kind != EWeaverBlockEditKind::Move)
+    {
+        OnBlockEndpointClicked.ExecuteIfBound(Lane, Item, Kind == EWeaverBlockEditKind::ResizeStart);
+    }
 }
 
 void SWeaverTimeline::ToggleBlockExpansion(const FGuid& BlockId)
@@ -1002,28 +1048,27 @@ void SWeaverTimeline::ToggleBlockExpansion(const FGuid& BlockId)
 
 void SWeaverTimeline::FinishPrimaryInteraction(const bool bCancelled)
 {
+    TFunction<void()> Notify;
     if (DragMode == EDragMode::Key && DragItemId.IsValid())
     {
         const double FinalFrame = bCancelled ? DragOriginalKeyFrame : DragPreviewKeyFrame;
-        OnKeyEditFinished.ExecuteIfBound(DragLaneId, DragItemId, FinalFrame, bCancelled);
+        Notify = [Delegate = OnKeyEditFinished, Lane = DragLaneId, Item = DragItemId, FinalFrame, bCancelled]()
+        { Delegate.ExecuteIfBound(Lane, Item, FinalFrame, bCancelled); };
     }
     else if (DragMode == EDragMode::Block && DragItemId.IsValid())
     {
         const double FinalStart = bCancelled ? DragOriginalBlockStart : DragPreviewBlockStart;
         const double FinalEnd = bCancelled ? DragOriginalBlockEnd : DragPreviewBlockEnd;
-        OnBlockEditFinished.ExecuteIfBound(DragLaneId, DragItemId, FinalStart, FinalEnd, bCancelled);
+        Notify = [Delegate = OnBlockEditFinished, Lane = DragLaneId, Item = DragItemId, FinalStart, FinalEnd, bCancelled]()
+        { Delegate.ExecuteIfBound(Lane, Item, FinalStart, FinalEnd, bCancelled); };
     }
     else if (DragMode == EDragMode::TimingRow && DragTimingBlockId.IsValid())
     {
         const float FinalStart = bCancelled ? DragOriginalTimingStart : DragPreviewTimingStart;
         const float FinalEnd = bCancelled ? DragOriginalTimingEnd : DragPreviewTimingEnd;
-        OnTimingRowEditFinished.ExecuteIfBound(
-            DragLaneId,
-            DragTimingBlockId,
-            DragTimingRowId,
-            FinalStart,
-            FinalEnd,
-            bCancelled);
+        Notify = [Delegate = OnTimingRowEditFinished, Lane = DragLaneId, Item = DragTimingBlockId,
+            Row = DragTimingRowId, FinalStart, FinalEnd, bCancelled]()
+        { Delegate.ExecuteIfBound(Lane, Item, Row, FinalStart, FinalEnd, bCancelled); };
     }
 
     DragMode = EDragMode::None;
@@ -1045,6 +1090,7 @@ void SWeaverTimeline::FinishPrimaryInteraction(const bool bCancelled)
     DragPreviewTimingStart = 0.0f;
     DragPreviewTimingEnd = 1.0f;
     Invalidate(EInvalidateWidgetReason::Paint);
+    if (Notify) { Notify(); }
 }
 
 void SWeaverTimeline::ResetRightMouseState()
@@ -1092,6 +1138,7 @@ FReply SWeaverTimeline::OnMouseButtonDown(
             if (const FWeaverKey* Key = FindKey(Hit.KeyId))
             {
                 BeginKeyDrag(*Key, Local);
+                if (DragMode != EDragMode::Key) { return FReply::Handled(); }
                 return FReply::Handled()
                     .CaptureMouse(SharedThis(this))
                     .SetUserFocus(SharedThis(this), EFocusCause::Mouse);
@@ -1117,6 +1164,7 @@ FReply SWeaverTimeline::OnMouseButtonDown(
                         }))
                     {
                         BeginTimingRowDrag(*Block, *Row, Hit.bTimingStartHandle, Local);
+                        if (DragMode != EDragMode::TimingRow) { return FReply::Handled(); }
                         return FReply::Handled()
                             .CaptureMouse(SharedThis(this))
                             .SetUserFocus(SharedThis(this), EFocusCause::Mouse);
@@ -1136,6 +1184,7 @@ FReply SWeaverTimeline::OnMouseButtonDown(
                 }
 
                 BeginBlockDrag(*Block, Hit.BlockEditKind, Local);
+                if (DragMode != EDragMode::Block) { return FReply::Handled(); }
                 return FReply::Handled()
                     .CaptureMouse(SharedThis(this))
                     .SetUserFocus(SharedThis(this), EFocusCause::Mouse);
@@ -1402,8 +1451,7 @@ FReply SWeaverTimeline::OnKeyDown(
     }
 
     const FWeaverSelection Deleted = Selection;
-    FWeaverSelection Empty;
-    ApplySelection(Empty, true);
+    if (!bDeferDeleteSelectionToSource) { ClearSelection(true); }
     OnDeleteRequested.ExecuteIfBound(Deleted.Type, Deleted.LaneId, Deleted.ItemId);
     return FReply::Handled();
 }

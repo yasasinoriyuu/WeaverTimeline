@@ -4,6 +4,7 @@
 #include "LevelEditor.h"
 #include "Modules/ModuleManager.h"
 #include "SWeaverTimelineHost.h"
+#include "SWeaverEditableTimeline.h"
 #include "Widgets/SOverlay.h"
 
 FWeaverViewportOverlay::~FWeaverViewportOverlay()
@@ -15,9 +16,11 @@ FWeaverViewportOverlay::~FWeaverViewportOverlay()
 void FWeaverViewportOverlay::Register(
     const TSharedRef<SWidget>& InContent,
     const FText& InCollapsedLabel,
-    const float InExpandedHeight)
+    const float InExpandedHeight,
+    FSimpleDelegate InOnDeactivated)
 {
     Unregister();
+    OnDeactivated = InOnDeactivated;
 
     OverlayWidget =
         SNew(SOverlay)
@@ -30,6 +33,7 @@ void FWeaverViewportOverlay::Register(
             SNew(SWeaverTimelineHost)
             .ExpandedHeight(InExpandedHeight)
             .CollapsedLabel(InCollapsedLabel)
+            .OnDeactivated(OnDeactivated)
             [
                 InContent
             ]
@@ -46,6 +50,7 @@ void FWeaverViewportOverlay::Register(
 
 void FWeaverViewportOverlay::Unregister()
 {
+    OnDeactivated.ExecuteIfBound();
     if (TickerHandle.IsValid())
     {
         FTSTicker::GetCoreTicker().RemoveTicker(TickerHandle);
@@ -54,10 +59,19 @@ void FWeaverViewportOverlay::Unregister()
 
     DetachFromViewport();
     OverlayWidget.Reset();
+    OnDeactivated.Unbind();
+}
+
+void FWeaverViewportOverlay::RegisterEditable(const TSharedRef<SWeaverEditableTimeline>& InContent,
+    const FText& InCollapsedLabel, float InExpandedHeight)
+{
+    Register(InContent, InCollapsedLabel, InExpandedHeight,
+        FSimpleDelegate::CreateSP(InContent, &SWeaverEditableTimeline::Deactivate));
 }
 
 void FWeaverViewportOverlay::SetVisible(const bool bInVisible)
 {
+    if (!bInVisible) { OnDeactivated.ExecuteIfBound(); }
     bVisible = bInVisible;
     if (OverlayWidget.IsValid())
     {
@@ -96,6 +110,7 @@ void FWeaverViewportOverlay::AttachToActiveViewport()
 
 void FWeaverViewportOverlay::DetachFromViewport()
 {
+    if (AttachedViewport.IsValid()) { OnDeactivated.ExecuteIfBound(); }
     if (const TSharedPtr<IAssetViewport> Viewport = AttachedViewport.Pin())
     {
         if (OverlayWidget.IsValid())

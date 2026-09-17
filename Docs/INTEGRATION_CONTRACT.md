@@ -1,254 +1,80 @@
-# WeaverTimeline integration contract
+# WeaverTimeline V5 集成契约
 
-## Purpose
+## 默认入口与模块边界
 
-`Core/` is reusable UE5 Editor presentation + interaction infrastructure only. It is intentionally copied into each consuming Editor Module instead of being loaded as a shared plugin dependency.
+Core 是复制进消费者 Editor Module 的源码母版，默认使用 SWeaverEditableTimeline。SWeaverTimeline 保留底层绘制和回调 API，直接使用它不具有 V5 的提交闭环保证。
 
-The source master now has four reusable layers:
+| 层 | 所有权 |
+| --- | --- |
+| SWeaverTimeline | Slate 绘制、HitTest、输入捕获、局部拖拽预览 |
+| SWeaverEditableTimeline / FWeaverTimelineEditController | Session、终止、提交后的全量回读、Selection/Expansion 协调 |
+| IWeaverTimelineEditAdapter | 权威数据映射、业务规则、事务对象、外部预览目的地 |
+| FWeaverSequencerBridge | 可选时间、ViewRange、轨道几何同步 |
+| Host / Overlay | 可选布局、折叠、Viewport attach/detach |
 
-```text
-SWeaverTimeline
-    self-drawn timeline interaction core
+Core 没有反射类型或模块导出宏。参考插件的 transactional UObject、测试 Tab 注册留在 Reference，不复制到业务消费者。依赖单向为 Consumer → Core → UE Editor/Slate。
 
-SWeaverEditableTimeline + FWeaverTimelineEditController
-    CAK-proven generic edit-session closure
+## 接入
 
-SWeaverTimelineHost + FWeaverViewportOverlay
-    optional CAK-style bottom-of-Level-Viewport presentation shell
+构造 SWeaverEditableTimeline，传入 Adapter；可选 SyncSequencer(true)、DisplayRateProvider、OnFrameChanged。Overlay 使用 RegisterEditable(Timeline, Label)，自动绑定隐藏/折叠/卸载取消。
 
-FWeaverSequencerBridge
-    optional active-Sequencer time / view-range / geometry synchronization
-```
+实现三个必需方法：GetContext、BuildPresentation、Commit(Session)。消费者不再连接 Finished 后的 SetBlocks/SetKeys。
 
-A consumer may use only the layers it needs, but copied `Core/` source must remain byte-for-byte identical to the source master.
+## Proposal 与权威结果
 
-## Default editable integration path
-
-Version 4 changes the recommended integration path for editable consumers.
-
-Do **not** make every consumer manually rebuild the same lifecycle:
+固定流程：
 
 ```text
-On*Started
-  -> On*Changed
-  -> On*Finished
-  -> write authoritative data
-  -> rebuild FWeaver presentation
-  -> SetBlocks / SetKeys
+HitTest → BeginEdit → Original + Proposal + SessionId + Context
+       → BeginPreview → UpdatePreview（零或多次）
+       → BeginTransaction → Commit → Transaction.Finish
+       → EndPreview → BuildPresentation → SetPresentation → OnReconciled
 ```
 
-Instead, editable consumers should normally provide an `IWeaverTimelineEditAdapter`, wrap it in `FWeaverTimelineEditController`, and host the timeline through `SWeaverEditableTimeline`.
+Cancel 跳过事务和 Commit，仍执行 EndPreview 和全量回读。提交返回 Applied / Rejected / NoChange；控制器取消返回 Cancelled。Applied 允许 Snap、Clamp、冲突调整和修改多个对象；最终值不必等于 Proposal。Reason 是业务说明，不是 UI 几何。
 
-```text
-business authoritative source
-        ↑ commit / cancel
-IWeaverTimelineEditAdapter
-        ↑
-FWeaverTimelineEditController
-        ↑
-SWeaverEditableTimeline
-        ↑
-SWeaverTimeline
-```
+BuildPresentation 每次读取完整当前权威状态。Key/Block ID 必须有效且稳定，在各自类型内唯一；LaneId 引用存在的 Lane；Timing Row ID 在所属 Block 内唯一。禁止用数组索引生成身份。
 
-This preserves the CAK-proven pattern:
+## Session、数据源与外部预览
 
-```text
-Begin
-  -> visual Preview inside the timeline
-  -> Commit on MouseUp OR Cancel on Esc/CaptureLost
-  -> rebuild from authoritative source
-  -> redraw authoritative result
-```
+- 所有调用和 OnSourceChanged 广播在编辑器/Slate 线程执行。
+- GetContext 返回数据源身份和单调递增的 Revision。切换资产/Sequence/文档时更换 Context.Id；外部修改、删除、Undo/Redo 时递增 Revision 并广播 OnSourceChanged。Revision 放在非事务状态中，不随 Undo 回退。
+- Session 保存开始时的 Context、Original、当前 Proposal 和独立 SessionId。权威变化取消旧 Session，旧 MouseUp 不得写入新数据源。
+- BeginPreview/UpdatePreview 只修改临时预览。EndPreview 按 Session.Id/Context 清理原目的地，在成功、拒绝、取消、隐藏、销毁后都调用一次。即使消费者已切换对象，也必须能清理旧 sink。
+- Cancel 不得把 Original 写回当前权威对象。权威值可能已被外部更新；取消只清理 preview 并重读。
+- 回调中允许发 SourceChanged 或请求刷新。控制器串行处理；终止前已移除活动 Session，重入 Finished 不会再次 Commit。
+- 读取回调应当纯读。读取期间 Context 变化时不发布混合快照，下一次 Tick 重试。Tick 检测漏发事件但 Revision 已变化的来源；它无法检测既不通知也不更新 Revision 的业务写入。
 
-The low-level `SWeaverTimeline` delegates remain available for advanced consumers that intentionally own the complete lifecycle themselves, but that is no longer the default path.
+## Transaction / Undo / 通知
 
-## Business adapter responsibilities
+消费者可实现 BeginTransaction(Session)，返回 IWeaverEditTransaction。Core 只在提交瞬间创建 scope，在 Commit 后调用 Finish，随后销毁。参考实现使用 FScopedTransaction，在写入前调用 Document.Modify；Rejected/NoChange 取消空事务。
 
-A consuming plugin Adapter must:
+Rejected/NoChange 必须保持权威数据不变；若业务先写后失败，业务自身应回滚。Core 无法替未知资产撤销任意副作用。默认无需在整个鼠标拖拽期间打开事务。
 
-1. Build stable `FGuid` identities for lanes, keys and blocks.
-2. Build `FWeaverTimelinePresentation` from its authoritative business data.
-3. Own persistence, transactions, Undo/Redo and runtime meaning.
-4. Implement commit functions for the edit types it supports.
-5. Return `Accepted` only after the requested final value has actually been written to its authoritative source.
-6. Return `Rejected` when business rules refuse the proposal.
-7. Keep preview callbacks transient; do not silently turn them into persistent writes.
-8. Own the business meaning of the current frame and respond to incoming Sequencer frame changes.
+Undo/Redo 完成后消费者广播 OnSourceChanged；参考 UObject 在 PostEditUndo 中通知适配器。Core 自动回读并发出 OnReconciled，业务缓存/实时求值系统可订阅这个已稳定的 Presentation 通知。通知附带的是最后一次编辑结果；外部刷新本身不等同于新 Commit。
 
-The Core never writes MovieScene business data, assets, camera state, action data or audio data itself.
+## 所有修改共用入口
 
-## Commit invariant
+SWeaverEditableTimeline 把 Delete/Backspace 自动转成 CommandId=Delete；Lane Header Action 自动转成对应 ActionId。消费者在 Commit 中解释命令。
 
-`FWeaverTimelineEditController` always rebuilds presentation data after Commit or Cancel.
+业务右键菜单只负责呈现菜单。Create/Duplicate/Paste/属性修改等菜单动作调用 Controller.ExecuteCommand，传入 Target=Command、CommandId 和目标/帧字段。这个入口也保证提交、清理和刷新。菜单布局和弹出位置约束由创建它的消费者负责。
 
-If an Adapter returns `Accepted`, the rebuilt authoritative presentation must contain the same final value requested by the edit gesture:
+## Selection、Expansion 与 teardown
 
-- Key: final frame
-- Block: final start/end
-- Timing Row: final start/end ratio
+同一 Context 内按稳定 ID 保留选择；对象换 Lane 时更新所选 LaneId，对象被删除时清除并通知。Context 改变清选择和展开覆盖；已删除 Block 的展开记录也被清理。
 
-If the authoritative rebuild does not match, the Controller stores a validation error and emits `ensureMsgf`. This catches the exact class of bug where a UI says an edit succeeded but the consumer forgot to persist it.
+使用 Overlay.RegisterEditable 自动在隐藏、折叠、Viewport detach、Unregister 时取消编辑。手工构造 Host 时将 OnDeactivated 绑定到 EditableTimeline.Deactivate；自定义 Tab 在关闭/隐藏时调用 Deactivate。任意外部父 Widget 的隐藏不是 Core 可观察的通用事件，消费者须使用这个明确的生命周期入口。EditableTimeline 析构会 detach 控制器、取消编辑，并解绑留存子 Widget 的回调。
 
-A visible snap-back therefore has only two valid meanings under the default V4 path:
+## 时间与视图
 
-- the Adapter returned `Rejected`, so authoritative business rules intentionally refused the edit; or
-- the Adapter violated the Accepted contract, which is diagnosed as an invariant failure.
+SyncSequencer(true) 自动注册 Bridge、传递 Scrub/Pan/Zoom、在 Tick 镜像 ViewRange/TrackArea/播放 SubFrame，并在 Sequencer 绑定或 focused Sequence 变化时取消编辑。默认发现策略仍是 LevelEditor integration 中第一个有效 Sequencer，不代表支持任意多个窗口的用户意图判定。
 
-It must not be silently treated as success.
+数据源与哪个 Sequence 对应由 Adapter 决定；业务上下文变化时必须更新 Context。Bridge 取消保护不替代数据身份规则。SetCurrentFrame 可供外部时间源更新播放头；它不产生反向通知。
 
-## Preview rule
+## 依赖、版本与迁移
 
-`SWeaverTimeline` owns visual drag preview state for Key / Block / Timing Row gestures. Consumers do not need to call `SetBlocks()` or `SetKeys()` on every mouse move.
+复制全部 Core 文件到消费者 Editor Module 私有目录。实际依赖见 Reference 模块 Build.cs：Core、CoreUObject、Engine、Slate、SlateCore、InputCore、UnrealEd、LevelEditor、MovieScene、Sequencer、SequencerWidgets。没有 Runtime → Editor 依赖。
 
-Optional Adapter preview callbacks exist only for external transient effects such as runtime preview. They are not authoritative persistence.
+V3 底层交互 API 保留。V4 试验性分散 CommitKey/CommitBlock/CommitTimingRow 适配器升级为统一 Session/Proposal Commit；Accepted 必须等于 Proposal 的规则已废弃。版本号为 5，以区别远程 V4 草案。现有消费者须迁移 Adapter，不能仅同步 Core 就宣称完成集成。
 
-This mirrors CAK's proven `BeginMoveBlock -> PreviewMoveBlock -> CommitMoveBlock` pattern: high-frequency pointer motion does not repeatedly write persistent assets.
-
-## Cancel rule
-
-Escape and mouse-capture loss are cancellation paths.
-
-The Controller calls the Adapter's matching cancel callback and then rebuilds presentation from the authoritative source. The Adapter may use cancel callbacks to undo transient external preview effects, but it should not need to reconstruct authoritative state if preview never wrote persistent data.
-
-## UI-only expansion state
-
-Block expansion is presentation state, not business persistence.
-
-`FWeaverTimelineEditController` remembers expanded `BlockId`s across authoritative presentation rebuilds. A consumer does not need to serialize `bExpanded` into MovieScene, CAK assets, audio data, or other business storage.
-
-## Stable identity rule
-
-Do not use array position as identity. `LaneId`, `KeyId` and `BlockId` must remain stable while the corresponding business item exists. Array ordering is display ordering only.
-
-## Drag lifecycle
-
-Low-level Key editing emits:
-
-```text
-OnKeyEditStarted
-  -> zero or more OnKeyEditChanged
-  -> OnKeyEditFinished(..., bCancelled)
-```
-
-Low-level Block editing emits the same lifecycle with `EWeaverBlockEditKind` identifying Move / ResizeStart / ResizeEnd.
-
-Block endpoint interaction has a small pending phase. A left click on a block endpoint that stays below the drag threshold emits `OnBlockEndpointClicked(LaneId, BlockId, bStart)` and does not start a resize lifecycle. Once the pointer crosses the threshold, the normal block resize lifecycle begins.
-
-Timing rows use the same Started -> Changed -> Finished lifecycle as other edits.
-
-When `SWeaverEditableTimeline` is used, these low-level lifecycle delegates are wired to `FWeaverTimelineEditController`; consumers implement the Adapter instead of manually reconstructing the lifecycle.
-
-## External ViewRange mode
-
-`SetExternalViewRange(Start, End)` means another system owns the authoritative visible time range.
-
-In this mode, RMB pan and wheel zoom emit `OnViewRangeChanged(NewStart, NewEnd)`, but the widget does not make that new range authoritative by itself.
-
-When `FWeaverSequencerBridge` is used, bind the timeline's view-range request to `PushTimelineViewRange`. The bridge applies the request to Sequencer; the next `Sync()` mirrors Sequencer's resulting range back into the timeline.
-
-Without external mode, the widget updates its own local range and also emits the delegate.
-
-## Sequencer bridge contract
-
-`FWeaverSequencerBridge` is editor infrastructure, not business logic.
-
-The consumer should:
-
-- register the bridge with its `SWeaverTimeline` instance;
-- provide the timeline display-rate resolver when its frame domain is not simply Sequencer's focused display rate;
-- receive `FOnWeaverSequencerFrameChanged` and update its own current-frame/business preview state;
-- bind timeline scrub changes to `PushTimelineFrame`;
-- bind timeline view-range changes to `PushTimelineViewRange`;
-- call `Sync(TimelineGeometry)` from the owning Slate widget's `Tick`.
-
-`Sync()` mirrors Sequencer's view range, aligns the self-drawn track area with Sequencer's `TrackAreaView`, and pulls SubFrame time during playback. Active-Sequencer discovery is intentionally low-frequency, following CAK's proven pattern rather than scanning the editor every frame.
-
-## Viewport host / overlay contract
-
-`SWeaverTimelineHost` only owns collapse/expand, panel height and resize mouse-capture behavior.
-
-`FWeaverViewportOverlay` only owns attachment to the active Level Editor viewport. It uses the same bottom-aligned overlay placement proven in CAK and rechecks the active viewport once per second.
-
-`SetVisible(false)` collapses the overlay root and removes it from hit testing while leaving registration, timeline data and all business/evaluation state intact.
-
-Neither layer may create business panels or reference Camera / CharacterAction / Audio systems directly.
-
-## Context menu rule
-
-Core distinguishes RMB click from RMB drag:
-
-- RMB drag: horizontal timeline pan.
-- RMB click on Key/Block: `OnContextRequested`.
-- RMB click on an empty track area: `OnLaneContextRequested(LaneId, Frame, ScreenPosition)`.
-
-Core does not build or register business menus. The Adapter owns any menu UI.
-
-Lane header actions are presentation data in `FWeaverLane::HeaderActions`. An enabled action click emits `OnLaneHeaderActionRequested(LaneId, ActionId)`; the Adapter or owning Panel owns the action's business meaning and toggled-state update.
-
-## Delete rule
-
-Delete/Backspace emits `OnDeleteRequested`. The Core clears visual selection but does not delete business data itself. Delete remains a business operation because ownership, transactions and validation differ by consumer.
-
-## Reference adapter
-
-`Reference/WeaverTimelineReferenceAdapter.*` is the canonical minimal consumer example. It is intentionally not part of copied `Core/`.
-
-It must keep the following regression checks demonstrable:
-
-- Block Move persists after MouseUp.
-- ResizeStart persists after MouseUp.
-- ResizeEnd persists after MouseUp.
-- Key drag persists after MouseUp.
-- Timing Start/End ratios persist after MouseUp.
-- Esc and CaptureLost restore authoritative pre-gesture state.
-- Commit rejection intentionally restores authoritative state.
-- Returning `Accepted` without persistence is diagnosed as a contract violation.
-
-New consumers should compare their Adapter against this reference before inventing their own edit lifecycle.
-
-## Module requirements
-
-Base Timeline / EditableTimeline / Host use standard dependencies:
-
-```text
-Core
-Slate
-SlateCore
-InputCore
-```
-
-Viewport Overlay and Sequencer Bridge require additional UE Editor modules. CAK's currently working implementation includes:
-
-```text
-UnrealEd
-LevelEditor
-MovieScene
-Sequencer
-SequencerWidgets
-```
-
-Do not treat that list as a frozen implementation recipe across UE versions. The consuming plugin's local UE5 Skill and compile result are authoritative.
-
-No module API macro is used by the source master. Keep the copied Core inside the consuming module rather than exporting it across module boundaries.
-
-## Forbidden additions to Core
-
-Do not add business-specific knowledge such as:
-
-```text
-Camera
-StateKey
-Orbit
-CharacterAction
-Pose
-ControlRig
-Audio
-HeadMotion
-MovieScene business persistence
-plugin-specific Tab / ToolMenu / StyleSet registration
-```
-
-`FWeaverTimelineEditController` may orchestrate generic edit lifecycle, but it must never know what a Camera Motion Block, Character Action, audio gesture, or MovieScene Section means.
-
-If a new feature only makes sense for one consumer, implement it in that consumer's Adapter first. Promote it into Core only when it is genuinely interaction infrastructure shared by the editors.
+验证方式和范围见 [Reference README](../Reference/README.md)。

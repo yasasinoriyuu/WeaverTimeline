@@ -15,16 +15,41 @@ Relevant proven files:
 
 ```text
 Source/CharacterActionKitPlannerEditor/Private/SCharacterActionPlannerTimeline.h/.cpp
+Source/CharacterActionKitPlannerEditor/Public/CharacterActionPlannerModel.h
+Source/CharacterActionKitPlannerEditor/Private/CharacterActionPlannerModel.cpp
 Source/CharacterActionKitPlannerEditor/Private/SCharacterActionPlannerViewportHost.h/.cpp
 Source/CharacterActionKitPlannerEditor/Private/CharacterActionPlannerViewportOverlay.h/.cpp
 Source/CharacterActionKitPlannerEditor/Private/SCharacterActionPlannerPanel.h/.cpp
 ```
 
+## What CAK actually proved
+
+CAK's stable block move is not only a Slate gesture. It is a complete edit loop:
+
+```text
+MouseDown
+  -> FCharacterActionPlannerModel::BeginMoveBlock
+MouseMove
+  -> PreviewMoveBlock
+  -> timeline paints PreviewStartFrame
+MouseUp
+  -> CommitMoveBlock
+  -> authoritative Arrangement changes
+  -> drag preview resets
+  -> next paint reads the committed Arrangement value
+CaptureLost
+  -> preview state resets without committing
+```
+
+`CharacterActionPlannerModel.h` explicitly states that persistent mutation happens on MouseUp, while pointer movement uses preview state instead of high-frequency asset writes.
+
+This lifecycle is the behavior reference for WeaverTimeline Version 4.
+
 ## Extracted into WeaverTimeline
 
 ### Timeline interaction core
 
-From `SCharacterActionPlannerTimeline` and the first CineWeaver neutralization pass:
+From `SCharacterActionPlannerTimeline` and the CineWeaver neutralization passes:
 
 - self-drawn Slate timeline
 - ruler and playhead
@@ -35,6 +60,8 @@ From `SCharacterActionPlannerTimeline` and the first CineWeaver neutralization p
 - key drag lifecycle
 - block move lifecycle
 - block edge resize lifecycle
+- endpoint click vs drag threshold
+- expandable timing rows and ratio handles
 - scrub
 - horizontal pan
 - wheel zoom
@@ -44,6 +71,32 @@ From `SCharacterActionPlannerTimeline` and the first CineWeaver neutralization p
 - external visible-range mode
 
 The source master generalizes identity to stable `LaneId / KeyId / BlockId` instead of treating array index as business identity.
+
+### Generic edit-session closure (Version 4)
+
+Version 3 stopped at generic drag delegates. That was too thin: every consumer still had to remember to translate `Finished` into authoritative persistence and then re-feed the timeline.
+
+Version 4 extracts the reusable part of CAK's `Begin -> Preview -> Commit/Cancel -> authoritative redraw` pattern into:
+
+```text
+FWeaverTimelineEditController
+SWeaverEditableTimeline
+IWeaverTimelineEditAdapter
+```
+
+The Controller is business-neutral. It does not know about Arrangement, MovieScene, Camera, Action, Audio, UObject transactions, overlap rules, or runtime evaluation.
+
+It does guarantee the generic lifecycle:
+
+```text
+Begin
+  -> optional external transient preview
+  -> Commit or Cancel
+  -> rebuild authoritative presentation
+  -> re-feed SWeaverTimeline
+```
+
+It also verifies the central invariant: if an Adapter returns `Accepted`, the rebuilt authoritative Key / Block / Timing Row must match the requested final value. This prevents a consumer from reporting success while the UI silently snaps back because nothing was persisted.
 
 ### Viewport host
 
@@ -102,20 +155,27 @@ The following remain CAK business behavior and should not move into WeaverTimeli
 - CharacterAction runtime evaluation
 - CAK asset creation and persistence
 - CAK quick action palette
+- CAK-specific `FScopedTransaction` text and `Arrangement.Modify()` calls
 
-If another plugin later needs a visually similar feature, it should first be implemented in that plugin's Adapter. Only behavior that is genuinely business-neutral should be promoted into the source master.
+For other consumers, their Adapter owns the corresponding business persistence and transaction logic.
+
+## Reference consumer
+
+`Reference/WeaverTimelineReferenceAdapter.*` is the canonical pure-memory consumer for Version 4. It exists so future adapters can compare against one known-good implementation instead of re-deriving the edit contract from prose.
 
 ## Current extraction status
 
-Source Version 2 contains the reusable parts of CAK's complete editor shell:
+Source Version 4 contains:
 
 ```text
-self-drawn timeline        extracted
-viewport host              extracted
-active viewport overlay    extracted
-sequencer time sync        extracted
-sequencer view sync        extracted
-sequencer track alignment  extracted
+self-drawn timeline             extracted
+edit-session closure            extracted
+reference adapter               provided
+viewport host                   extracted
+active viewport overlay         extracted
+sequencer time sync             extracted
+sequencer view sync             extracted
+sequencer track alignment       extracted
 ```
 
-The remaining work is not more CAK business extraction. The next meaningful gate is consumer integration and UE compilation: copy Version 2 into a real consumer Editor Module, wire its Adapter, follow the local UE5 Skill, and compile-fix against the actual UE5.8 environment.
+The next gate is consumer integration and UE5.8 compilation: sync the whole Version 4 `Core/` into CineWeaver, wire a business Adapter through `SWeaverEditableTimeline`, and validate the same mouse gestures in the real UE project.

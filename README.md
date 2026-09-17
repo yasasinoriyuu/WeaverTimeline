@@ -16,6 +16,8 @@ WeaverTimeline (source master)
 
 当前源码母版版本：`6`。本版修复 V5 的联动开关、提交前取消、端点通知和鼠标取消边界；验证记录见 [VALIDATION_V6.md](Docs/VALIDATION_V6.md)。
 
+**状态：V6 已冻结（2026-09-18，用户验收确认）。** 冻结源码基线为 `977774f0e208e8c18399e283f2adad4927fb22c3`，归档标签为 `v6-frozen`。冻结约定及验收范围见 [FREEZE_V6.md](Docs/FREEZE_V6.md)。
+
 ## Core 组成
 
 ### 默认编辑入口

@@ -33,6 +33,8 @@ public:
         , _LabelWidth(148.0f)
         , _DeferDeleteSelectionToSource(false)
         , _AllowTrackAreaScrub(true)
+        , _SeparateEndpointActions(false)
+        , _ActiveEndpointIsStart(true)
     {}
         SLATE_ATTRIBUTE(double, CurrentFrame)
         SLATE_ARGUMENT(float, RulerHeight)
@@ -41,6 +43,12 @@ public:
         SLATE_ARGUMENT(bool, DeferDeleteSelectionToSource)
         /** Empty lane clicks may clear selection without seeking; other input paths are unchanged. */
         SLATE_ARGUMENT(bool, AllowTrackAreaScrub)
+        /** Opt-in: endpoint buttons never become timing drags. Labels/state belong to the consumer. */
+        SLATE_ARGUMENT(bool, SeparateEndpointActions)
+        SLATE_ARGUMENT(FText, StartEndpointLabel)
+        SLATE_ARGUMENT(FText, EndEndpointLabel)
+        SLATE_ATTRIBUTE(FGuid, ActiveEndpointBlock)
+        SLATE_ATTRIBUTE(bool, ActiveEndpointIsStart)
         SLATE_EVENT(FOnWeaverFrameChanged, OnFrameChanged)
         SLATE_EVENT(FOnWeaverSelectionChanged, OnSelectionChanged)
         SLATE_EVENT(FOnWeaverKeyEditStarted, OnKeyEditStarted)
@@ -97,9 +105,18 @@ public:
     virtual FReply OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent) override;
     virtual void OnMouseCaptureLost(const FCaptureLostEvent& CaptureLostEvent) override;
     virtual void OnMouseLeave(const FPointerEvent& MouseEvent) override;
+    virtual FCursorReply OnCursorQuery(const FGeometry&, const FPointerEvent&) const override;
     virtual bool SupportsKeyboardFocus() const override { return true; }
 
 private:
+    struct FEndpointLayout
+    {
+        FSlateRect Start, End;
+        float BodyTop = 0, BodyHeight = 0;
+        bool bAbove = false, bVisible = false;
+    };
+    FEndpointLayout EndpointLayout(const FGeometry&, const FWeaverBlock&, int32 Lane, float X0, float X1) const;
+    void DrawEndpointActions(FSlateWindowElementList&, int32, const FGeometry&, const FWeaverBlock&, const FEndpointLayout&) const;
     enum class EDragMode : uint8
     {
         None,
@@ -214,6 +231,14 @@ private:
     bool bExternalViewRange = false;
     bool bDeferDeleteSelectionToSource = false;
     bool bAllowTrackAreaScrub = true;
+    bool bSeparateEndpointActions = false;
+    FText StartEndpointLabel, EndEndpointLabel;
+    TAttribute<FGuid> ActiveEndpointBlock;
+    TAttribute<bool> ActiveEndpointIsStart;
+    FHitResult HoverHit;
+    bool bEndpointPressCancelled = false;
+    // Freeze layout choice for the duration of a gesture, including crossing the narrow threshold.
+    bool bDragEndpointsAbove = false;
     float RulerHeight = 24.0f;
     float LaneHeight = 36.0f;
     float LabelWidth = 148.0f;

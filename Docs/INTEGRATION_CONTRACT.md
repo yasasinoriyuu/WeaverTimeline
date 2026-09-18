@@ -92,3 +92,11 @@ SyncSequencer(true) 自动注册 Bridge、传递 Scrub/Pan/Zoom、在 Tick 镜�
 V3 底层交互 API 保留。V4 试验性分散 CommitKey/CommitBlock/CommitTimingRow 适配器升级为统一 Session/Proposal Commit；Accepted 必须等于 Proposal 的规则已废弃。V6 在 V5 基础上修复四处边界并增加可选端点通知，不改变必需 Adapter 方法。旧消费者须迁移 Adapter，不能仅同步 Core 就宣称完成集成。Reference 额外依赖 LevelSequence，用于创建真实 Sequencer 的隔离测试，不是 Core 的新增依赖。
 
 验证方式和范围见 [Reference README](../Reference/README.md)。
+
+## 可选独立端点入口（2026-09-18）
+
+`SeparateEndpointActions(true)` 将 Block 外侧时间手柄与端点点击区域分离。未开启的消费者保留旧点击／拖动规则。`StartEndpointLabel`、`EndEndpointLabel` 和 `ActiveEndpointBlock` / `ActiveEndpointIsStart` 由消费者提供；活动状态是消费者真实编辑 session 的只读映射，Core 不推测业务编辑是否成功。
+
+可见宽度至少 220 Slate 单位时端点入口在块内；不足时，选中／活动块的入口放在所在行上半部，块身在下半部。按钮对限制在可见轨道范围，作为当前块的临时操作条优先于同一行邻块绘制、命中；不覆盖别的行。时间手柄只调整范围，按钮的轻微抖动容忍为 4 单位，超过或在外部松开仅取消，绝不转换操作。拖动期间不切换上下布局。带 TimingRows 的块保留其三角与行布局，不添加这些按钮。
+
+文本、悬停与命中共用布局；所有新绑定在 UnbindCallbacks 释放。当前 CineWeaver 消费端负责端点失效、Esc、对象切换等真实退出，母版不持有相机／Section 指针。

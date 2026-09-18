@@ -9,7 +9,7 @@
 class SWeaverEditableTimeline final : public SCompoundWidget
 {
 public:
-    SLATE_BEGIN_ARGS(SWeaverEditableTimeline) : _SyncSequencer(false), _JumpToEndpointOnClick(true), _EmbeddedInSequencer(false), _AllowTrackAreaScrub(true) {}
+    SLATE_BEGIN_ARGS(SWeaverEditableTimeline) : _SyncSequencer(false), _JumpToEndpointOnClick(true), _EmbeddedInSequencer(false), _AllowTrackAreaScrub(true), _SeparateEndpointActions(false), _ActiveEndpointIsStart(true) {}
         SLATE_ARGUMENT(TSharedPtr<IWeaverTimelineEditAdapter>, Adapter)
         SLATE_ARGUMENT(bool, SyncSequencer)
         SLATE_ARGUMENT(bool, JumpToEndpointOnClick)
@@ -17,6 +17,11 @@ public:
         SLATE_ARGUMENT(TWeakPtr<ISequencer>, SequencerSource)
         SLATE_ARGUMENT(bool, EmbeddedInSequencer)
         SLATE_ARGUMENT(bool, AllowTrackAreaScrub)
+        SLATE_ARGUMENT(bool, SeparateEndpointActions)
+        SLATE_ARGUMENT(FText, StartEndpointLabel)
+        SLATE_ARGUMENT(FText, EndEndpointLabel)
+        SLATE_ATTRIBUTE(FGuid, ActiveEndpointBlock)
+        SLATE_ATTRIBUTE(bool, ActiveEndpointIsStart)
         SLATE_ARGUMENT(FWeaverSequencerBridge::FDisplayRateProvider, DisplayRateProvider)
         SLATE_EVENT(FOnWeaverFrameChanged, OnFrameChanged)
         SLATE_EVENT(FOnWeaverSelectionChanged, OnSelectionChanged)

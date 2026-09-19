@@ -37,6 +37,7 @@ public:
     void Deactivate();
     /** Terminal owner teardown, including when another Slate parent still retains this widget. */
     void Shutdown();
+    bool IsShutdown() const { return bShutdown; }
     void SetCurrentFrame(double Frame);
     double GetCurrentFrame() const { return CurrentFrame; }
 private:

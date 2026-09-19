@@ -79,6 +79,8 @@ public:
     void CancelInteraction();
     void UnbindCallbacks();
     const TArray<FWeaverBlock>& GetDisplayedBlocks() const { return Blocks; }
+    /** Native consumer outliners use the same expanded geometry as the timeline. */
+    float GetLaneDisplayHeight(FGuid LaneId) const { return LaneHeightForIndex(FindLaneIndex(LaneId)); }
     const TArray<FWeaverKey>& GetDisplayedKeys() const { return Keys; }
 
     void SetSelection(const FWeaverSelection& InSelection);

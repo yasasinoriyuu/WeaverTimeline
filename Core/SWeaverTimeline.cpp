@@ -540,9 +540,10 @@ SWeaverTimeline::FEndpointLayout SWeaverTimeline::EndpointLayout(
     FEndpointLayout Result;
     Result.BodyTop = LaneTop(Lane) + BlockVerticalPadding;
     Result.BodyHeight = FMath::Max(1.f, LaneHeight - BlockVerticalPadding * 2);
-    if (!bSeparateEndpointActions || !Block.TimingRows.IsEmpty()) { return Result; }
+    if (!bSeparateEndpointActions) { return Result; }
     const float Left = FMath::Max(TrackLeft(), X0);
     const float Right = FMath::Min(TrackRight(Geometry), X1);
+    const float ToggleSpace = Block.TimingRows.IsEmpty() ? 0.f : 20.f;
     Result.bAbove = Right - Left < 220.f;
     if (DragItemId == Block.BlockId && DragMode != EDragMode::None)
     { Result.bAbove = bDragEndpointsAbove; }
@@ -564,7 +565,7 @@ SWeaverTimeline::FEndpointLayout SWeaverTimeline::EndpointLayout(
     }
     else
     {
-        Result.Start = FSlateRect(X0 + 10.f, Result.BodyTop + 2.f, X0 + 82.f, Result.BodyTop + Result.BodyHeight - 2.f);
+        Result.Start = FSlateRect(X0 + 10.f + ToggleSpace, Result.BodyTop + 2.f, X0 + 82.f + ToggleSpace, Result.BodyTop + Result.BodyHeight - 2.f);
         Result.End = FSlateRect(X1 - 82.f, Result.BodyTop + 2.f, X1 - 10.f, Result.BodyTop + Result.BodyHeight - 2.f);
     }
     return Result;
@@ -783,7 +784,7 @@ int32 SWeaverTimeline::OnPaint(
         if (Block.TimingRows.Num() > 0 && ToggleGeometry.IsValid())
         {
             const TArray<FVector2f> Toggle =
-                Block.bExpanded
+                !Block.bExpanded
                     ? TArray<FVector2f>
                     {
                         FVector2f(ToggleGeometry.Left + 2.0f, ToggleGeometry.Top + 2.0f),
@@ -1051,8 +1052,9 @@ SWeaverTimeline::FHitResult SWeaverTimeline::HitTest(
                 }
 
                 const float Width = FMath::Max(1.0f, X1 - X0);
-                const float StartX = X0 + Width * FMath::Clamp(Row.StartRatio, 0.0f, 1.0f);
-                const float EndX = X0 + Width * FMath::Clamp(Row.EndRatio, Row.StartRatio, 1.0f);
+                const float StartRatio = FMath::Clamp(Row.StartRatio, 0.0f, 1.0f);
+                const float StartX = X0 + Width * StartRatio;
+                const float EndX = X0 + Width * FMath::Clamp(Row.EndRatio, StartRatio, 1.0f);
                 if (FMath::Abs(Local.X - StartX) <= TimingRowHandleWidth || FMath::Abs(Local.X - EndX) <= TimingRowHandleWidth)
                 {
                     Result.BlockId = Block.BlockId;
@@ -1122,11 +1124,12 @@ void SWeaverTimeline::UpdateHover(const FGeometry& Geometry, const FVector2D& Lo
 
 FCursorReply SWeaverTimeline::OnCursorQuery(const FGeometry& Geometry, const FPointerEvent& Event) const
 {
+    const auto Hit = HitTest(Geometry, Geometry.AbsoluteToLocal(Event.GetScreenSpacePosition()));
+    if (DragMode == EDragMode::TimingRow || Hit.bTimingRow) { return FCursorReply::Cursor(EMouseCursor::ResizeLeftRight); }
     if (!bSeparateEndpointActions) { return FCursorReply::Unhandled(); }
     if (DragMode == EDragMode::PendingBlockEndpoint) { return FCursorReply::Cursor(EMouseCursor::Hand); }
     if (DragMode == EDragMode::Block && DragBlockEditKind != EWeaverBlockEditKind::Move)
     { return FCursorReply::Cursor(EMouseCursor::ResizeLeftRight); }
-    const auto Hit = HitTest(Geometry, Geometry.AbsoluteToLocal(Event.GetScreenSpacePosition()));
     if (Hit.bBlockEndpoint) { return FCursorReply::Cursor(EMouseCursor::Hand); }
     if (Hit.BlockId.IsValid() && Hit.BlockEditKind != EWeaverBlockEditKind::Move)
     { return FCursorReply::Cursor(EMouseCursor::ResizeLeftRight); }
@@ -1458,6 +1461,11 @@ FReply SWeaverTimeline::OnMouseButtonUp(
         }
         else
         {
+            // Slate may coalesce the last move before release. Commit the release position,
+            // not a stale preview; a cancelled gesture has already cleared DragMode.
+            if (DragMode == EDragMode::TimingRow &&
+                !MyGeometry.AbsoluteToLocal(MouseEvent.GetScreenSpacePosition()).Equals(DragStartLocal, .01f))
+            { OnMouseMove(MyGeometry, MouseEvent); }
             FinishPrimaryInteraction(false);
         }
         return FReply::Handled().ReleaseMouseCapture();
